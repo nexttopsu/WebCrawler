@@ -1,0 +1,27 @@
+{
+  "name": "@webcrawler/plugins",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "description": "WebCrawler 插件系统",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@webcrawler/core": "workspace:*",
+    "@webcrawler/request": "workspace:*",
+    "@webcrawler/shared": "workspace:*"
+  }
+}

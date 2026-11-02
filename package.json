@@ -1,0 +1,30 @@
+{
+  "name": "webcrawler",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "description": "WebCrawler - 插件化网页采集平台",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@12.11.2",
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "pnpm --parallel --filter @webcrawler/server --filter @webcrawler/web run dev",
+    "dev:server": "pnpm --filter @webcrawler/server dev",
+    "dev:web": "pnpm --filter @webcrawler/web dev",
+    "start:server": "pnpm --filter @webcrawler/server start",
+    "db:init": "pnpm --filter @webcrawler/server db:init",
+    "fixture": "node scripts/fixture-site.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "happy-dom": "^21.0.4",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

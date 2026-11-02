@@ -1,0 +1,13 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# pnpm 12 用 allowBuilds 替代了 onlyBuiltDependencies（v11 起移除）。
+# esbuild 是 Vite 的构建依赖，需要执行安装脚本下载对应平台的二进制。
+allowBuilds:
+  esbuild: true
+  # Playwright 安装脚本会下载 Chromium，浏览器采集能力依赖它。
+  playwright: true
+
+minimumReleaseAgeExclude:
+  - linkedom@0.18.15

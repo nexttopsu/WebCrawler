@@ -1,0 +1,30 @@
+{
+  "name": "@webcrawler/core",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "description": "WebCrawler 采集核心",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "demo:crawl": "tsx scripts/crawl-demo.ts"
+  },
+  "dependencies": {
+    "@webcrawler/request": "workspace:*",
+    "@webcrawler/shared": "workspace:*",
+    "cheerio": "~1.0.0",
+    "linkedom": "^0.18.15",
+    "xpath": "^0.0.36"
+  }
+}

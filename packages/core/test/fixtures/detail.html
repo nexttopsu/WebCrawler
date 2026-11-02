@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>第一篇报道 - 示例站</title>
+  </head>
+  <body>
+    <article>
+      <h1 class="article-title">
+        第一篇报道：采集平台上线
+      </h1>
+      <div class="meta">
+        <span class="author">张三</span>
+        <time class="publish-time">2026-01-01 10:00</time>
+      </div>
+      <div class="article-content">
+        <p>第一段正文，介绍平台的整体能力。</p>
+        <p>第二段正文，包含一个<a href="javascript:alert(1)" onclick="alert(2)">危险链接</a>。</p>
+        <img src="/images/a.png" />
+        <img data-src="https://cdn.example.com/b.png" alt="外链图片" />
+        <img src="/images/a.png" alt="重复图片" />
+        <script>
+          document.write('这段脚本不应该出现在正文里')
+        </script>
+        <style>
+          .article-content {
+            color: red;
+          }
+        </style>
+      </div>
+      <div class="ad">这里是广告，应该被清理掉</div>
+    </article>
+  </body>
+</html>

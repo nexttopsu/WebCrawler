@@ -1,0 +1,378 @@
+/* ==========================================================================
+   WebCrawler 设计 Token
+   --------------------------------------------------------------------------
+   浅色为默认主题，暗色通过 `html.dark` 覆盖同名变量实现。
+   组件只使用变量、不写死颜色，因此换主题不需要改组件。
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* 背景与表面 */
+  --wb-bg: #f4f6fa;
+  --wb-bg-subtle: #eef1f7;
+  --wb-surface: #ffffff;
+  --wb-surface-muted: #f8fafc;
+  --wb-surface-hover: #f3f6fc;
+
+  /* 描边 */
+  --wb-border: #e6e9f0;
+  --wb-border-strong: #d7dce7;
+
+  /* 文本 */
+  --wb-text: #1b2432;
+  --wb-text-secondary: #55606f;
+  --wb-text-muted: #8a94a6;
+  --wb-text-inverse: #ffffff;
+
+  /* 语义色 */
+  --wb-primary: #2f6bff;
+  --wb-primary-hover: #2457d6;
+  --wb-primary-soft: #ebf1ff;
+  --wb-success: #12b76a;
+  --wb-success-soft: #e7f8f0;
+  --wb-danger: #e5484d;
+  --wb-danger-soft: #fdeced;
+  --wb-warning: #d97706;
+  --wb-warning-soft: #fef3e2;
+  --wb-info: #0ea5e9;
+  --wb-info-soft: #e6f6fe;
+  --wb-neutral: #64748b;
+  --wb-neutral-soft: #f1f5f9;
+
+  /* 形状与阴影 */
+  --wb-radius-xs: 6px;
+  --wb-radius-sm: 8px;
+  --wb-radius: 12px;
+  --wb-radius-lg: 16px;
+  --wb-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --wb-shadow: 0 8px 28px rgba(16, 24, 40, 0.06);
+  --wb-shadow-md: 0 14px 40px rgba(16, 24, 40, 0.12);
+
+  /* 布局 */
+  --wb-sidebar-width: 236px;
+  --wb-sidebar-collapsed: 68px;
+  --wb-header-height: 64px;
+  --wb-content-max: 1560px;
+  --wb-gap: 16px;
+  --wb-card-padding: 18px 20px;
+
+  /* Element Plus 对齐 */
+  --el-color-primary: #2f6bff;
+  --el-color-success: #12b76a;
+  --el-color-danger: #e5484d;
+  --el-color-warning: #d97706;
+  --el-border-radius-base: 8px;
+  --el-font-size-base: 14px;
+  --el-box-shadow-light: 0 8px 28px rgba(16, 24, 40, 0.08);
+}
+
+html.dark {
+  color-scheme: dark;
+
+  --wb-bg: #0f1420;
+  --wb-bg-subtle: #0b1017;
+  --wb-surface: #161c2b;
+  --wb-surface-muted: #1b2231;
+  --wb-surface-hover: #1f2839;
+
+  --wb-border: #26303f;
+  --wb-border-strong: #334052;
+
+  --wb-text: #e7ecf5;
+  --wb-text-secondary: #a9b4c6;
+  --wb-text-muted: #7d8798;
+  --wb-text-inverse: #0f1420;
+
+  --wb-primary: #5b8bff;
+  --wb-primary-hover: #7ba1ff;
+  --wb-primary-soft: rgba(91, 139, 255, 0.16);
+  --wb-success: #34d399;
+  --wb-success-soft: rgba(52, 211, 153, 0.14);
+  --wb-danger: #f87171;
+  --wb-danger-soft: rgba(248, 113, 113, 0.14);
+  --wb-warning: #fbbf24;
+  --wb-warning-soft: rgba(251, 191, 36, 0.14);
+  --wb-info: #38bdf8;
+  --wb-info-soft: rgba(56, 189, 248, 0.14);
+  --wb-neutral: #94a3b8;
+  --wb-neutral-soft: rgba(148, 163, 184, 0.14);
+
+  --wb-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wb-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --wb-shadow-md: 0 16px 44px rgba(0, 0, 0, 0.55);
+
+  --el-color-primary: #5b8bff;
+  --el-color-success: #34d399;
+  --el-color-danger: #f87171;
+  --el-color-warning: #fbbf24;
+  --el-bg-color: #161c2b;
+  --el-bg-color-overlay: #1b2231;
+  --el-fill-color-blank: #161c2b;
+  --el-text-color-primary: #e7ecf5;
+  --el-text-color-regular: #a9b4c6;
+  --el-border-color: #26303f;
+  --el-border-color-light: #26303f;
+  --el-border-color-lighter: #202836;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--wb-bg);
+  color: var(--wb-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--wb-border-strong);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--wb-text-muted);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ==========================================================================
+   通用类
+   ========================================================================== */
+
+/**
+ * 卡片容器。
+ *
+ * 默认带内边距：绝大多数卡片里直接放标题、表单、键值表，
+ * 不给内边距就会贴着边框（设置页、任务详情都踩过）。
+ * 需要内容贴边的场景（表格、图表铺满）用 `.wb-card--flush` 显式关掉，
+ * 由内部组件自己控制留白。
+ */
+.wb-card {
+  background: var(--wb-surface);
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius);
+  box-shadow: var(--wb-shadow-sm);
+  padding: var(--wb-card-padding);
+}
+
+.wb-card--flush {
+  padding: 0;
+}
+
+@media (max-width: 960px) {
+  .wb-card {
+    padding: 14px 14px;
+  }
+}
+
+.wb-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--wb-text);
+}
+
+.wb-muted {
+  color: var(--wb-text-muted);
+}
+
+.wb-secondary {
+  color: var(--wb-text-secondary);
+}
+
+.wb-mono,
+.wb-font-mono {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.wb-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--wb-surface-muted);
+  border: 1px solid var(--wb-border);
+  color: var(--wb-text-secondary);
+  white-space: nowrap;
+}
+
+.wb-tag--primary {
+  background: var(--wb-primary-soft);
+  border-color: transparent;
+  color: var(--wb-primary);
+}
+
+.wb-tag--success {
+  background: var(--wb-success-soft);
+  border-color: transparent;
+  color: var(--wb-success);
+}
+
+.wb-tag--danger {
+  background: var(--wb-danger-soft);
+  border-color: transparent;
+  color: var(--wb-danger);
+}
+
+.wb-tag--warning {
+  background: var(--wb-warning-soft);
+  border-color: transparent;
+  color: var(--wb-warning);
+}
+
+.wb-tag--info {
+  background: var(--wb-info-soft);
+  border-color: transparent;
+  color: var(--wb-info);
+}
+
+/* 表格：统一表头与行高，避免每页各写一套 */
+.wb-table .el-table {
+  --el-table-border-color: var(--wb-border);
+  --el-table-header-bg-color: var(--wb-surface-muted);
+  --el-table-header-text-color: var(--wb-text-secondary);
+  --el-table-row-hover-bg-color: var(--wb-surface-hover);
+  --el-table-bg-color: var(--wb-surface);
+  --el-table-tr-bg-color: var(--wb-surface);
+  background: transparent;
+}
+
+.wb-table .el-table th.el-table__cell {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.wb-table .el-table .cell {
+  line-height: 1.5;
+}
+
+/* 工具栏：搜索 / 筛选 / 操作按钮一行排布，窄屏自动换行 */
+.wb-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.wb-toolbar__spacer {
+  flex: 1;
+}
+
+/* 详情键值表 */
+.wb-kv {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 10px 16px;
+  font-size: 13px;
+}
+
+.wb-kv dt {
+  color: var(--wb-text-muted);
+}
+
+.wb-kv dd {
+  margin: 0;
+  color: var(--wb-text);
+  word-break: break-all;
+}
+
+/* 代码 / JSON 块 */
+.wb-code {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--wb-radius-sm);
+  background: var(--wb-surface-muted);
+  border: 1px solid var(--wb-border);
+  color: var(--wb-text-secondary);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 正文阅读排版（文章详情） */
+.wb-article {
+  font-size: 15px;
+  line-height: 1.9;
+  color: var(--wb-text);
+  word-break: break-word;
+  /* 中文长文一行超过 45～50 字就开始难读，限制阅读宽度而不是铺满卡片 */
+  max-width: 820px;
+}
+
+.wb-article p {
+  margin: 0 0 14px;
+}
+
+.wb-article img {
+  max-width: 100%;
+  border-radius: var(--wb-radius-sm);
+}
+
+.wb-article a {
+  color: var(--wb-primary);
+  text-decoration: underline;
+}
+
+.wb-article h1,
+.wb-article h2,
+.wb-article h3 {
+  margin: 22px 0 10px;
+  line-height: 1.4;
+}
+
+/* 弹层跟随主题 */
+.el-card,
+.el-dialog,
+.el-drawer {
+  --el-card-bg-color: var(--wb-surface);
+  background: var(--wb-surface);
+  color: var(--wb-text);
+}
+
+.el-dialog__title,
+.el-drawer__title {
+  color: var(--wb-text);
+}

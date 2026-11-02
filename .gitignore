@@ -1,0 +1,12 @@
+node_modules/
+dist/
+data/
+*.log
+.DS_Store
+.env
+.env.local
+coverage/
+*.tsbuildinfo
+
+# 本地冒烟产物（截图、临时数据库）
+tmp/
