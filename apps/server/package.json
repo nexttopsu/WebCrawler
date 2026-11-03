@@ -1,0 +1,39 @@
+{
+  "name": "@webcrawler/server",
+  "version": "0.6.0",
+  "private": true,
+  "type": "module",
+  "description": "WebCrawler 后端：h3 服务、采集引擎、插件系统与数据库",
+  "scripts": {
+    "dev": "tsx watch src/server/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:init": "tsx src/server/scripts/init-db.ts",
+    "fixture": "node scripts/fixture-site.mjs",
+    "demo:crawl": "tsx scripts/crawl-demo.ts",
+    "seed": "node scripts/seed-demo.mjs",
+    "smoke": "node scripts/smoke-tester.mjs",
+    "smoke:ui": "node scripts/ui-smoke.mjs"
+  },
+  "dependencies": {
+    "cheerio": "~1.0.0",
+    "croner": "^11.0.0",
+    "h3": "^2.0.8",
+    "linkedom": "^0.18.15",
+    "ormlet": "^2.1.2",
+    "playwright": "^1.64.1",
+    "request-pack": "^1.1.1",
+    "socks-proxy-agent": "^10.1.0",
+    "xpath": "^0.0.36",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

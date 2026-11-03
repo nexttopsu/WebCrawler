@@ -3,54 +3,26 @@
   "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "WebCrawler - 插件化网页采集平台",
+  "description": "WebCrawler - 插件化网页采集平台（pnpm workspace：apps/server + apps/web）",
   "engines": {
     "node": ">=22.13"
   },
   "packageManager": "pnpm@12.11.2",
   "scripts": {
-    "dev": "concurrently -k -n server,web -c blue,green \"pnpm dev:server\" \"pnpm dev:web\"",
-    "dev:server": "tsx watch src/server/index.ts",
-    "dev:web": "vite",
-    "build": "tsc -p tsconfig.build.json",
-    "build:web": "vite build",
-    "start": "node dist/server/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit && vue-tsc --noEmit -p web/tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "db:init": "tsx src/server/scripts/init-db.ts",
-    "fixture": "node scripts/fixture-site.mjs",
-    "demo:crawl": "tsx scripts/crawl-demo.ts",
-    "smoke": "node scripts/smoke-tester.mjs"
-  },
-  "dependencies": {
-    "@lucide/vue": "^1.66.0",
-    "axios": "^1.21.0",
-    "cheerio": "~1.0.0",
-    "croner": "^11.0.0",
-    "echarts": "^6.1.0",
-    "element-plus": "^2.14.7",
-    "h3": "^2.0.8",
-    "linkedom": "^0.18.15",
-    "ormlet": "^2.1.2",
-    "pinia": "^4.1.0",
-    "playwright": "^1.64.1",
-    "request-pack": "^1.1.1",
-    "socks-proxy-agent": "^10.1.0",
-    "vue": "^3.5.44",
-    "vue-router": "^4.5.0",
-    "zod": "^4.6.7",
-    "xpath": "^0.0.36"
+    "dev": "concurrently -k -n server,web -c blue,green \"pnpm --filter @webcrawler/server dev\" \"pnpm --filter @webcrawler/web dev\"",
+    "build": "pnpm --filter @webcrawler/server build && pnpm --filter @webcrawler/web build",
+    "start": "pnpm --filter @webcrawler/server start",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:watch": "pnpm --filter @webcrawler/server test:watch",
+    "db:init": "pnpm --filter @webcrawler/server db:init",
+    "fixture": "pnpm --filter @webcrawler/server fixture",
+    "demo:crawl": "pnpm --filter @webcrawler/server demo:crawl",
+    "seed": "pnpm --filter @webcrawler/server seed",
+    "smoke": "pnpm --filter @webcrawler/server smoke",
+    "smoke:ui": "pnpm --filter @webcrawler/server smoke:ui"
   },
   "devDependencies": {
-    "@types/node": "^22.19.0",
-    "@vitejs/plugin-vue": "^6.0.10",
-    "concurrently": "^9.1.2",
-    "happy-dom": "^21.0.4",
-    "tsx": "^4.23.15",
-    "typescript": "5.9.3",
-    "vite": "^8.3.5",
-    "vitest": "^5.0.5",
-    "vue-tsc": "^3.3.14"
+    "concurrently": "^9.1.2"
   }
 }

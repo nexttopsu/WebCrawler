@@ -31,33 +31,37 @@
 ```
 .
 ├── apps
-│   ├── server                  # H3 v2 后端（应用组装、中间件、路由）
-│   └── web                     # Vue 3 + Vite 管理后台
-├── packages
-│   ├── shared                  # 公共类型：API 结构、领域枚举、采集契约
-│   ├── database                # ORMlet 模型 + 迁移
-│   ├── request                 # 统一请求层：HTTP / 浏览器 / 代理 / SSRF
-│   ├── core                    # 采集核心：解析、清洗、校验、管道、引擎
-│   └── plugins                 # 插件契约、注册表、通用站点插件
+│   ├── server                  # @webcrawler/server：H3 v2 后端 + 采集核心
+│   │   ├── src
+│   │   │   ├── server          # 应用组装、中间件、路由、服务层
+│   │   │   ├── database        # ORMlet 模型 + 迁移
+│   │   │   ├── request         # 统一请求层：HTTP / 浏览器 / 代理 / SSRF
+│   │   │   ├── core            # 采集核心：解析、清洗、校验、管道、引擎
+│   │   │   ├── plugin-system   # 插件契约、注册表、通用站点插件
+│   │   │   └── shared          # 公共类型：API 结构、领域枚举、采集契约
+│   │   ├── test                # 后端 Vitest 测试
+│   │   └── scripts             # fixture 站点、种子数据、冒烟脚本
+│   └── web                     # @webcrawler/web：Vue 3 + Vite 管理后台
+│       ├── src
+│       └── test                # 前端 Vitest 测试
 ├── docs
-├── scripts                     # 本地 fixture 站点（pnpm fixture）与验收素材
-├── tsconfig.base.json
-├── tsconfig.typecheck.json
-└── vitest.config.ts
+├── tsconfig.base.json          # 两包共享的 TS 基础配置
+└── pnpm-workspace.yaml
 ```
 
-### packages/request
+### apps/server/src/request
 
 | 文件 | 职责 |
 | --- | --- |
-| `http-client.ts` | 统一 HTTP 入口：重定向逐跳校验、流式限流、幂等重试、编码识别 |
+| `http-client.ts` | 统一 HTTP 入口：重定向逐跳校验、流式限流、幂等重试、编码识别、TLS 链自动补全（AIA） |
 | `browser-client.ts` | Playwright 封装：复用 Browser、按次隔离 Context、并发页限制 |
 | `proxy-resolver.ts` | 代理解析、优先级选择、HTTP/HTTPS/SOCKS5 适配、脱敏 |
 | `ssrf-guard.ts` | 协议白名单、IP 段判定、DNS 校验、连接时 lookup 校验 |
+| `chain-recovery.ts` | TLS 链自动补全：识别缺中间证书错误，按 AIA 下载缺失证书后安全重试 |
 | `request-types.ts` | 请求参数、响应、浏览器结果类型 |
 | `request-errors.ts` | 统一 `RequestError` 与错误码 |
 
-### packages/core
+### apps/server/src/core
 
 | 文件 | 职责 |
 | --- | --- |
@@ -71,7 +75,7 @@
 | `task/limiter.ts` | `KeyedLimiter`（全局 + 按 key 并发）、`IntervalLimiter`（栏目间隔）、可取消 `delay` |
 | `task/pagination.ts` | 分页 URL 生成（`none` / `query` / `path`），`next` / `cursor` 明确报未实现 |
 
-### packages/shared
+### apps/server/src/shared
 
 | 文件 | 职责 |
 | --- | --- |
@@ -154,7 +158,7 @@ pnpm test             # Vitest，371 个用例（36 个测试文件）
 第四阶段界面冒烟（需先启动 fixture、后端与前端）：
 
 ```bash
-node packages/request/scripts/smoke-tester.mjs
+node apps/server/scripts/smoke-tester.mjs
 ```
 
 自动打开规则测试器、加载 fixture 列表页、点选 DOM、跑列表与详情测试，并刷新 `docs/stage4-tester*.png`。
@@ -269,7 +273,7 @@ pnpm --filter @webcrawler/core demo:crawl
 
 ## 采集规则结构
 
-规则是可校验的 JSON，Schema 定义在 `packages/shared/src/rule-schema.ts`，是服务端校验与后续调度执行的唯一来源（所有对象 `strict`，拼写错误直接 400，不会被忽略）。
+规则是可校验的 JSON，Schema 定义在 `apps/server/src/shared/rule-schema.ts`，是服务端校验与后续调度执行的唯一来源（所有对象 `strict`，拼写错误直接 400，不会被忽略）。
 
 ```json
 {
@@ -315,7 +319,7 @@ pnpm --filter @webcrawler/core demo:crawl
 
 ### 规则继承与深度合并
 
-生效规则按 `站点默认规则 < 栏目覆盖规则 < 任务临时覆盖规则` 三层合并，实现只有一处：`packages/shared/src/rule-merge.ts`。
+生效规则按 `站点默认规则 < 栏目覆盖规则 < 任务临时覆盖规则` 三层合并，实现只有一处：`apps/server/src/shared/rule-merge.ts`。
 
 | 场景 | 行为 |
 | --- | --- |
@@ -408,7 +412,7 @@ pnpm --filter @webcrawler/core demo:crawl
 
 ### 任务状态机
 
-六个状态集中在 `packages/shared/src/task-state.ts`，API、服务层、运行时与执行器共用同一张转换表；非法转换一律 409，并在 `details` 里给出允许的目标状态。
+六个状态集中在 `apps/server/src/shared/task-state.ts`，API、服务层、运行时与执行器共用同一张转换表；非法转换一律 409，并在 `details` 里给出允许的目标状态。
 
 ```
 pending ──▶ running ──▶ completed
@@ -493,8 +497,8 @@ running ──▶ cancelled
 
 12 个模型：`Site`、`Category`、`CrawlRule`、`CrawlRuleVersion`、`CrawlTask`、`CrawlSchedule`、`CrawlLog`、`Article`、`Proxy`、`Plugin`、`CrawlError`、`SystemSetting`。
 
-- 模型统一定义在 `packages/database/src/models`，进程内只有一个连接，业务模块通过 `getModels()` 取用。
-- 迁移在 `packages/database/src/migrations`：`_migrations` 记录版本，每个迁移独立事务。
+- 模型统一定义在 `apps/server/src/database/models`，进程内只有一个连接，业务模块通过 `getModels()` 取用。
+- 迁移在 `apps/server/src/database/migrations`：`_migrations` 记录版本，每个迁移独立事务。
 - `001-initial-indexes`：随模型同步的完整索引集，新库一次建好。
 - `002-stage3-upgrade`：第三阶段增量升级，用于老库原地演进——`site.url → baseUrl`（按域名补 `https://`）、`site.remark → description`、`category.url → listUrl`、`category.status → enabled`、`crawl_rule` 旧选择器列折叠成合法 JSON，并补 v1 版本快照、回填 `crawl_task.ruleVersion`。已在真实的旧库副本上验证列变更无数据丢失。
 - `003-stage5-indexes`：第五阶段索引——任务（`siteId+status`、`status+createdAt`、`scheduleId`）、文章（`contentHash`、`crawlTime`）、代理（`enabled`）、`ux_crawl_schedule_name`、日志（`taskId+id`、`level`、`createdAt`）。

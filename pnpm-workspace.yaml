@@ -1,0 +1,12 @@
+# pnpm workspace：后端与前端各自独立成包，根目录只做编排。
+packages:
+  - apps/*
+
+# allowBuilds：esbuild 是 Vite 的构建依赖，需要执行安装脚本下载对应平台的二进制；
+# playwright 安装脚本会下载 Chromium，浏览器采集能力依赖它。
+allowBuilds:
+  esbuild: true
+  playwright: true
+
+minimumReleaseAgeExclude:
+  - linkedom@0.18.15
