@@ -101,6 +101,8 @@ export const listTestBodySchema = testerBaseSchema.extend({
     .object({
       itemSelector: z.string().trim().min(1, '列表项选择器必填').max(500),
       itemSelectorType: z.enum(['css', 'xpath']).optional(),
+      /** 字段配置写法：title / url 必填，其余自定义（与保存的规则同构） */
+      fields: z.record(z.string(), fieldRuleSchema).optional(),
       linkSelector: z.string().trim().max(500).optional(),
       linkAttribute: z.string().trim().max(64).optional(),
       titleSelector: z.string().trim().max(500).optional(),
@@ -333,6 +335,7 @@ export async function testAdhocList(
     list: {
       itemSelector: input.list.itemSelector,
       ...(input.list.itemSelectorType ? { itemSelectorType: input.list.itemSelectorType } : {}),
+      ...(input.list.fields ? { fields: input.list.fields as Record<string, FieldRule> } : {}),
       ...(input.list.linkSelector ? { linkSelector: input.list.linkSelector } : {}),
       ...(input.list.linkAttribute ? { linkAttribute: input.list.linkAttribute } : {}),
       ...(input.list.titleSelector ? { titleSelector: input.list.titleSelector } : {}),

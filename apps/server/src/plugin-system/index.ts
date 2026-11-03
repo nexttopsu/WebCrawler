@@ -1,9 +1,11 @@
 import type { CrawlServices } from '../core/index.js'
 import {
   PluginRegistryError,
+  isParserPlugin,
   isSitePlugin,
   type CrawlerPlugin,
   type PluginManifest,
+  type ParserPlugin,
   type SitePlugin,
 } from './types.js'
 
@@ -83,6 +85,12 @@ export class PluginRegistry {
   getSitePlugin(name: string): SitePlugin | undefined {
     const plugin = this.instances.get(name)
     return plugin && isSitePlugin(plugin) ? plugin : undefined
+  }
+
+  /** 取解析器插件；不是解析器插件时返回 undefined。 */
+  getParserPlugin(name: string): ParserPlugin | undefined {
+    const plugin = this.instances.get(name)
+    return plugin && isParserPlugin(plugin) ? plugin : undefined
   }
 
   /** 全部运行时实例，按名称排序。 */

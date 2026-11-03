@@ -1,11 +1,23 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { TesterFieldDraft } from '@/composables/useTesterDraft'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from '@lucide/vue'
+
+interface FieldPreset {
+  key: string
+  label: string
+  type: 'text' | 'html' | 'attr'
+  attribute?: string
+  multiple?: boolean
+  required?: boolean
+}
 
 const props = defineProps<{
   fields: TesterFieldDraft[]
   title: string
   subtitle?: string
+  /** 内置字段预设；缺省为详情字段的默认预设 */
+  builtIns?: FieldPreset[]
 }>()
 
 const emit = defineEmits<{
@@ -18,14 +30,16 @@ const FIELD_TYPES = [
   { value: 'attr', label: 'attr（属性）' },
 ] as const
 
-/** 任务书要求的内置字段。 */
-const BUILT_IN_FIELDS: Array<Pick<TesterFieldDraft, 'key' | 'label' | 'type'>> = [
-  { key: 'title', label: '标题', type: 'text' },
-  { key: 'content', label: '正文', type: 'html' },
+/** 详情字段的默认内置预设。 */
+const DEFAULT_BUILT_INS: FieldPreset[] = [
+  { key: 'title', label: '标题', type: 'text', required: true },
+  { key: 'content', label: '正文', type: 'html', required: true },
   { key: 'author', label: '作者', type: 'text' },
   { key: 'publishTime', label: '发布时间', type: 'text' },
-  { key: 'images', label: '图片', type: 'attr' },
+  { key: 'images', label: '图片', type: 'attr', attribute: 'src', multiple: true },
 ]
+
+const builtInFields = computed<FieldPreset[]>(() => props.builtIns ?? DEFAULT_BUILT_INS)
 
 function cloneFields(): TesterFieldDraft[] {
   return props.fields.map((field) => ({ ...field }))
@@ -33,7 +47,7 @@ function cloneFields(): TesterFieldDraft[] {
 
 function addBuiltIn(key: string): void {
   if (props.fields.some((field) => field.key === key)) return
-  const preset = BUILT_IN_FIELDS.find((item) => item.key === key)
+  const preset = builtInFields.value.find((item) => item.key === key)
   if (!preset) return
   emit('update:fields', [
     ...cloneFields(),
@@ -42,9 +56,9 @@ function addBuiltIn(key: string): void {
       label: preset.label,
       selector: '',
       type: preset.type,
-      attribute: preset.key === 'images' ? 'src' : '',
-      multiple: preset.key === 'images',
-      required: preset.key === 'title' || preset.key === 'content',
+      attribute: preset.attribute ?? '',
+      multiple: preset.multiple === true,
+      required: preset.required === true,
       defaultValue: '',
       trim: true,
       collapseWhitespace: false,
@@ -92,7 +106,7 @@ function moveField(index: number, offset: -1 | 1): void {
 }
 
 const availableBuiltIns = (): Array<{ key: string; label: string }> =>
-  BUILT_IN_FIELDS.filter((item) => !props.fields.some((field) => field.key === item.key)).map((item) => ({
+  builtInFields.value.filter((item) => !props.fields.some((field) => field.key === item.key)).map((item) => ({
     key: item.key,
     label: `${item.label}（${item.key}）`,
   }))

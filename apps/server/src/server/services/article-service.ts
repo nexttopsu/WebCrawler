@@ -4,6 +4,7 @@ import {
   type ArticleRow,
 } from '../../database/index.js'
 import {
+  ArticleDetailStatus,
   normalizeArticleUrl,
   type ArticleData,
   type ArticleDeleteResultDto,
@@ -13,6 +14,7 @@ import {
   type ArticleSummaryDto,
 } from '../../shared/index.js'
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import { BadRequestError, NotFoundError, ValidationError } from '../errors.js'
 import { keywordField, likePattern, paginationFields, runRawList, toPage } from '../lib/query.js'
 
@@ -161,6 +163,10 @@ export function saveCrawledArticle(
     publishedAt,
     status: 'published' as ArticleStatus,
     extra: clampJson(metadata),
+    // 完整详情一次采出来的文章，详情状态直接记为已采集
+    detailStatus: ArticleDetailStatus.COLLECTED,
+    detailCollectedAt: new Date().toISOString(),
+    detailError: null,
     crawlTime: article.crawlTime ?? new Date().toISOString(),
     ...(input.rawHtml ? { rawHtml: input.rawHtml.slice(0, RAW_HTML_MAX) } : {}),
   }
@@ -197,6 +203,232 @@ export function findArticleIdByUrl(rawUrl: string): number | null {
 }
 
 /* -------------------------------------------------------------------------- */
+/* 列表 / 详情分离采集                                                          */
+/* -------------------------------------------------------------------------- */
+
+export interface ListArticleOutcome {
+  status: 'created' | 'skipped'
+  articleId?: number
+  reason?: string
+}
+
+/**
+ * 列表阶段入库：只落 title + url（含列表阶段提取的自定义字段与封面）。
+ *
+ * 同一 URL 已存在时跳过（不覆盖已有数据），详情留待 `detailStatus` 驱动补采。
+ */
+export function saveListArticle(input: {
+  siteId: number
+  categoryId: number | null
+  taskId: number | null
+  title: string
+  url: string
+  coverUrl?: string | null
+  /** 列表阶段提取的自定义字段 */
+  extra?: Record<string, unknown>
+  crawlTime?: string
+}): ListArticleOutcome {
+  const models = getModels()
+  const url = normalizeArticleUrl(input.url)
+  if (!url) return { status: 'skipped', reason: '地址为空' }
+
+  const title = input.title.trim()
+  if (!title) return { status: 'skipped', reason: '列表标题为空' }
+
+  const existing = models.article.findOne({ url })
+  if (existing) {
+    // 旧记录缺标题（理论少见）时补齐，其余不覆盖
+    if (!existing.title && title) models.article.update(existing.id, { title })
+    return { status: 'skipped', articleId: existing.id, reason: '已存在' }
+  }
+
+  const created = models.article.create({
+    siteId: input.siteId,
+    categoryId: input.categoryId,
+    taskId: input.taskId,
+    title,
+    url,
+    status: 'pending' as ArticleStatus,
+    detailStatus: ArticleDetailStatus.PENDING,
+    detailError: null,
+    coverUrl: input.coverUrl ?? null,
+    extra: clampJson(input.extra ?? {}),
+    crawlTime: input.crawlTime ?? new Date().toISOString(),
+  })
+  return { status: 'created', articleId: created.id }
+}
+
+export interface DetailArticleOutcome {
+  status: 'created' | 'updated' | 'skipped'
+  articleId?: number
+  reason?: string
+}
+
+/**
+ * 详情补采入库：同名字段**有值才覆盖**列表阶段的值。
+ *
+ * - URL 不存在（如列表入库前详情先跑）→ 直接按完整文章创建；
+ * - 已存在 → 合并字段（空值保留旧值），重算内容 Hash；
+ *   Hash 未变化 → skipped，不空转更新。
+ */
+export function applyArticleDetail(input: {
+  article: ArticleData
+  siteId: number
+  categoryId: number | null
+  taskId: number | null
+  rawHtml?: string | null
+}): DetailArticleOutcome {
+  const models = getModels()
+  const url = normalizeArticleUrl(input.article.url)
+  const existing = models.article.findOne({ url })
+
+  if (!existing) {
+    const outcome = saveCrawledArticle(
+      {
+        article: input.article,
+        siteId: input.siteId,
+        categoryId: input.categoryId,
+        taskId: input.taskId,
+        rawHtml: input.rawHtml,
+      },
+      { dedupeByContentHash: false },
+    )
+    return { status: outcome.status === 'created' ? 'created' : 'updated', articleId: outcome.articleId }
+  }
+
+  const merged = mergeDetailFields(existing, input.article)
+
+  if (existing.contentHash && merged.contentHash && existing.contentHash === merged.contentHash) {
+    models.article.update(existing.id, {
+      detailStatus: ArticleDetailStatus.COLLECTED,
+      detailCollectedAt: new Date().toISOString(),
+      detailError: null,
+    })
+    return { status: 'skipped', articleId: existing.id, reason: '详情内容未变化' }
+  }
+
+  models.article.update(existing.id, {
+    ...merged.fields,
+    detailStatus: ArticleDetailStatus.COLLECTED,
+    detailCollectedAt: new Date().toISOString(),
+    detailError: null,
+    ...(input.rawHtml ? { rawHtml: input.rawHtml.slice(0, RAW_HTML_MAX) } : {}),
+  })
+  return { status: 'updated', articleId: existing.id }
+}
+
+/**
+ * 「有值才覆盖」的字段合并。
+ *
+ * 详情提取为空（未映射到 / 页面没有）时保留列表阶段已有的值，
+ * 避免详情失败把标题、封面等清掉；详情有值才覆盖。
+ */
+function mergeDetailFields(
+  existing: ArticleRow,
+  article: ArticleData,
+): { fields: Record<string, unknown>; contentHash: string } {
+  const pick = (incoming: string | null | undefined, old: string | null | undefined): string | null => {
+    const value = incoming?.trim()
+    return value ? value : (old ?? null)
+  }
+
+  const content = pick(article.content, existing.content)
+  const html = pick(article.html, existing.contentHtml)
+  const author = pick(article.author, existing.author)
+
+  const publishedAt = (() => {
+    const incoming = toIsoTime(article.publishTime)
+    return incoming ?? existing.publishedAt ?? null
+  })()
+
+  const images = article.images.length > 0 ? article.images : parseStringArray(existing.images)
+  const coverUrl = (() => {
+    const incoming = resolveCoverUrl(article.coverUrl, '', existing.url ?? '')
+    if (incoming) return incoming
+    return existing.coverUrl ?? null
+  })()
+
+  const summary = content ? buildSummary(content) : existing.summary ?? null
+
+  // 自定义字段：详情的 extra 与列表阶段的 extra 按键合并，详情有值才覆盖
+  const mergedExtra: Record<string, unknown> = { ...parseExtra(existing.extra) }
+  if (article.metadata) {
+    for (const [key, value] of Object.entries(article.metadata)) {
+      if (key === 'sourceUrl' || key === 'listTitle') continue
+      if (value !== null && value !== undefined && value !== '') mergedExtra[key] = value
+    }
+  }
+
+  const contentHash = hashContent(article.title.trim() || existing.title || '', content ?? '')
+
+  return {
+    fields: {
+      title: article.title.trim() || existing.title,
+      author,
+      summary,
+      content: content ?? '',
+      contentHtml: html ?? '',
+      coverUrl,
+      images: clampJson(images),
+      contentHash,
+      wordCount: countWords(content ?? ''),
+      publishedAt,
+      status: 'published' as ArticleStatus,
+      extra: clampJson(mergedExtra),
+    },
+    contentHash,
+  }
+}
+
+function hashContent(title: string, content: string): string {
+  return createHash('sha256').update(`${title}\n${content}`, 'utf8').digest('hex')
+}
+
+/** 标记详情采集失败（可重试）。 */
+export function markArticleDetailFailed(rawUrl: string, error: string): void {
+  const url = normalizeArticleUrl(rawUrl)
+  const existing = getModels().article.findOne({ url })
+  if (!existing) return
+  getModels().article.update(existing.id, {
+    detailStatus: ArticleDetailStatus.FAILED,
+    detailError: error.slice(0, 500),
+  })
+}
+
+/** 查询待补采详情的文章（pending / failed），按 id 升序分批返回。 */
+export function listArticlesForDetailCollect(options: {
+  siteId: number
+  categoryId?: number | null
+  /** 断点内已处理的 URL，跳过 */
+  excludeUrls?: ReadonlySet<string>
+  limit?: number
+}): Array<{ id: number; title: string; url: string }> {
+  const db = getDatabaseContext().db
+  const conditions = ["t.siteId = ?", "t.detailStatus IN ('pending', 'failed')"]
+  const params: Array<string | number> = [options.siteId]
+  if (options.categoryId) {
+    conditions.push('t.categoryId = ?')
+    params.push(options.categoryId)
+  }
+  const where = conditions.join(' AND ')
+  const limit = Math.min(Math.max(1, options.limit ?? 200), 1000)
+  const rows = db
+    .prepare(`SELECT id, title, url FROM article t WHERE ${where} ORDER BY t.id ASC LIMIT ?`)
+    .all(...params, limit * 2) as Array<{ id: number; title: string | null; url: string | null }>
+
+  const exclude = options.excludeUrls
+  const result: Array<{ id: number; title: string; url: string }> = []
+  for (const row of rows) {
+    if (!row.url) continue
+    const normalized = normalizeArticleUrl(row.url)
+    if (exclude?.has(normalized)) continue
+    result.push({ id: row.id, title: row.title ?? '', url: row.url })
+    if (result.length >= limit) break
+  }
+  return result
+}
+
+/* -------------------------------------------------------------------------- */
 /* 查询                                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -213,6 +445,7 @@ export const articleListQuerySchema = z.object({
   categoryId: z.coerce.number().int().positive().optional(),
   taskId: z.coerce.number().int().positive().optional(),
   status: z.enum(['pending', 'published', 'ignored']).optional(),
+  detailStatus: z.enum(['pending', 'collected', 'failed']).optional(),
   publishedFrom: isoTimeField.optional(),
   publishedTo: isoTimeField.optional(),
   crawledFrom: isoTimeField.optional(),
@@ -248,6 +481,10 @@ function buildWhere(query: Omit<ArticleListQuery, 'page' | 'pageSize' | 'sort' |
     conditions.push('t.status = ?')
     params.push(query.status)
   }
+  if (query.detailStatus) {
+    conditions.push('t.detailStatus = ?')
+    params.push(query.detailStatus)
+  }
   if (query.keyword) {
     conditions.push(
       "(t.title LIKE ? ESCAPE '\\' OR t.summary LIKE ? ESCAPE '\\' OR t.content LIKE ? ESCAPE '\\')",
@@ -277,7 +514,7 @@ function buildWhere(query: Omit<ArticleListQuery, 'page' | 'pageSize' | 'sort' |
 
 /** 列表不返回正文与原始 HTML，但保留 images 以便统计图片数。 */
 const SUMMARY_COLUMNS =
-  't.id, t.siteId, t.categoryId, t.taskId, t.title, t.url, t.author, t.summary, t.coverUrl, t.publishedAt, t.status, t.contentHash, t.images, t.wordCount, t.crawlTime, t.createdAt, t.updatedAt'
+  't.id, t.siteId, t.categoryId, t.taskId, t.title, t.url, t.author, t.summary, t.coverUrl, t.publishedAt, t.status, t.detailStatus, t.detailCollectedAt, t.detailError, t.contentHash, t.images, t.wordCount, t.crawlTime, t.createdAt, t.updatedAt'
 
 function parseStringArray(raw: string | null): string[] {
   if (!raw) return []
@@ -302,6 +539,9 @@ type SummaryRow = Pick<
   | 'coverUrl'
   | 'publishedAt'
   | 'status'
+  | 'detailStatus'
+  | 'detailCollectedAt'
+  | 'detailError'
   | 'contentHash'
   | 'images'
   | 'wordCount'
@@ -323,6 +563,9 @@ function toSummaryDto(row: SummaryRow): ArticleSummaryDto {
     coverUrl: row.coverUrl,
     publishedAt: row.publishedAt,
     status: (row.status ?? 'published') as ArticleStatus,
+    detailStatus: (row.detailStatus ?? 'collected') as ArticleDetailStatus,
+    detailCollectedAt: row.detailCollectedAt ?? null,
+    detailError: row.detailError ?? null,
     contentHash: row.contentHash,
     wordCount: row.wordCount ?? 0,
     imageCount: parseStringArray(row.images).length,

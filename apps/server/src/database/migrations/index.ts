@@ -2,6 +2,7 @@ import type { Database } from 'ormlet'
 import { migration001InitialIndexes } from './001-initial-indexes.js'
 import { migration002Stage3Upgrade } from './002-stage3-upgrade.js'
 import { migration003Stage5Indexes } from './003-stage5-indexes.js'
+import { migration004ArticleDetailStatus } from './004-article-detail-status.js'
 import type { AppliedMigration, Migration } from './types.js'
 
 export type { AppliedMigration, Migration } from './types.js'
@@ -13,6 +14,7 @@ export const migrations: readonly Migration[] = [
   migration001InitialIndexes,
   migration002Stage3Upgrade,
   migration003Stage5Indexes,
+  migration004ArticleDetailStatus,
 ]
 
 const CREATE_MIGRATIONS_TABLE = `

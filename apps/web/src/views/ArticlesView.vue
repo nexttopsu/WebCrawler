@@ -32,6 +32,7 @@ const list = useListQuery<
     siteId?: number
     categoryId?: number
     status: string
+    detailStatus: string
     range: [string, string] | null
   }
 >(
@@ -43,12 +44,13 @@ const list = useListQuery<
       siteId: params.siteId || undefined,
       categoryId: params.categoryId || undefined,
       status: params.status || undefined,
+      detailStatus: (params.detailStatus || undefined) as 'pending' | 'collected' | 'failed' | undefined,
       crawledFrom: params.range?.[0],
       crawledTo: params.range?.[1],
       sort: 'crawlTime',
       order: 'desc',
     }),
-  { keyword: '', siteId: undefined, categoryId: undefined, status: '', range: null },
+  { keyword: '', siteId: undefined, categoryId: undefined, status: '', detailStatus: '', range: null },
 )
 
 const siteOptions = ref<SiteDto[]>([])
@@ -240,6 +242,17 @@ void loadCategoryOptions()
         <el-option label="已发布" value="published" />
         <el-option label="已忽略" value="ignored" />
       </el-select>
+      <el-select
+        v-model="list.filters.detailStatus"
+        placeholder="详情状态"
+        clearable
+        style="width: 130px"
+        @change="list.search()"
+      >
+        <el-option label="详情待采集" value="pending" />
+        <el-option label="详情已采集" value="collected" />
+        <el-option label="详情失败" value="failed" />
+      </el-select>
       <el-date-picker
         v-model="list.filters.range"
         type="datetimerange"
@@ -307,6 +320,16 @@ void loadCategoryOptions()
       <el-table-column label="状态" width="88">
         <template #default="{ row }">
           <StatusTag :status="row.status" :map="ARTICLE_STATUS_MAP" />
+          <el-tooltip
+            v-if="row.detailStatus === 'pending'"
+            content="详情未采集（仅列表入库）"
+            placement="top"
+          >
+            <span class="detail-badge detail-badge--pending">详情待采</span>
+          </el-tooltip>
+          <el-tooltip v-else-if="row.detailStatus === 'failed'" :content="row.detailError || '详情采集失败'" placement="top">
+            <span class="detail-badge detail-badge--failed">详情失败</span>
+          </el-tooltip>
         </template>
       </el-table-column>
 
@@ -392,6 +415,26 @@ void loadCategoryOptions()
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.detail-badge {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+  width: fit-content;
+}
+
+.detail-badge--pending {
+  background: var(--wb-warning-bg, #faeeda);
+  color: var(--wb-warning, #854f0b);
+}
+
+.detail-badge--failed {
+  background: var(--wb-danger-bg, #fcebeb);
+  color: var(--wb-danger, #a32d2d);
 }
 
 .wb-link {

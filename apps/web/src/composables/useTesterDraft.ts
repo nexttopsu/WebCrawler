@@ -29,6 +29,8 @@ export interface TesterDraft {
     titleSelector: string
     coverSelector: string
     coverAttribute: string
+    /** 列表字段配置（推荐写法）：title / url 必填，其余自定义 */
+    listFields: TesterFieldDraft[]
     paginationType: 'none' | 'query' | 'path' | 'next' | 'cursor'
     paginationParameter: string
     /** path 模式模板，如 /page/{page} */
@@ -78,6 +80,7 @@ export function createEmptyDraft(): TesterDraft {
       titleSelector: '',
       coverSelector: '',
       coverAttribute: '',
+      listFields: [],
       paginationType: 'none',
       paginationParameter: 'page',
       paginationPathPattern: '/page/{page}',
@@ -99,7 +102,13 @@ export function loadTesterDraft(): TesterDraft | null {
     return {
       ...defaults,
       ...parsed,
-      list: { ...defaults.list, ...parsed.list },
+      list: {
+        ...defaults.list,
+        ...parsed.list,
+        listFields: Array.isArray((parsed.list as Record<string, unknown>).listFields)
+          ? ((parsed.list as Record<string, unknown>).listFields as TesterFieldDraft[])
+          : [],
+      },
       fields: parsed.fields,
     }
   } catch {

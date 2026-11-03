@@ -14,6 +14,7 @@ import type {
 import { absolutizeHtml, cleanHtml, htmlToText } from './clean.js'
 import { ParserError } from './errors.js'
 import { Parser, createParser } from './parser/index.js'
+import { extractFieldsViaHtml2Object } from './parser/html2object-bridge.js'
 import type { ExtractionResult, FieldExtraction } from './parser/extract.js'
 
 /** 管道阶段。 */
@@ -46,6 +47,11 @@ export interface PipelineInput {
   listCoverUrl?: string
   /** 附加元数据，会与自定义字段一起写入 article.metadata */
   metadata?: Record<string, unknown>
+  /**
+   * 解析器插件链：在字段提取完成后、清洗校验前调用，可重格式化数据
+   * （如图片地址解密）。按顺序执行，抛错视为该篇解析失败。
+   */
+  transform?: (data: Record<string, unknown>) => Promise<Record<string, unknown>>
 }
 
 /** 管道输出。 */
@@ -91,7 +97,7 @@ function hashContent(title: string, content: string): string {
 }
 
 /** 执行数据管道。 */
-export function runPipeline(input: PipelineInput, parser: Parser = sharedParser): PipelineResult {
+export async function runPipeline(input: PipelineInput, parser: Parser = sharedParser): Promise<PipelineResult> {
   const steps: PipelineStep[] = []
   const errors: string[] = []
 
@@ -104,14 +110,14 @@ export function runPipeline(input: PipelineInput, parser: Parser = sharedParser)
     })
   }
 
-  // 1. 解析
+  // 1. 解析（HTML 走 request-pack html2object 桥接；JSON 走 jsonPath 提取器）
   let parseStart = performance.now()
   let extraction: ExtractionResult
   try {
     if (input.contentType === 'json') {
       extraction = parser.extractJsonFields(parser.parseJson(input.body), input.fields, input.validate)
     } else {
-      extraction = parser.extractFields(input.body, input.fields, input.validate)
+      extraction = extractFieldsViaHtml2Object(input.body, input.fields, input.validate)
     }
   } catch (error) {
     const message = error instanceof ParserError ? error.message : String(error)
@@ -120,8 +126,24 @@ export function runPipeline(input: PipelineInput, parser: Parser = sharedParser)
   }
   record('parse', true, parseStart, `匹配字段 ${Object.keys(extraction.data).length} 个`)
 
-  const errorsFromExtract = extraction.errors
-  errors.push(...errorsFromExtract)
+  // 1.5 解析器插件：重格式化提取结果（如图片解密）
+  if (input.transform) {
+    parseStart = performance.now()
+    try {
+      const transformed = await input.transform(extraction.data)
+      extraction = {
+        ...extraction,
+        data: transformed,
+      }
+      record('parse', true, parseStart, '解析器插件已执行')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      record('parse', false, parseStart, message)
+      return { article: null, fields: extraction.fields, missing: extraction.missing, errors: [message], steps }
+    }
+  }
+
+  errors.push(...extraction.errors)
 
   // 2. 清洗
   parseStart = performance.now()

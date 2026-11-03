@@ -229,9 +229,15 @@ export interface ListRuleConfig {
   itemSelector: string
   /** 列表项容器选择器类型 */
   itemSelectorType?: SelectorType
-  /** 文章链接选择器，默认 `a` */
+  /**
+   * 列表字段配置（推荐写法）：`title` 与 `url` 必填，其余字段自定义。
+   * 每个字段支持 `text` / `html` / `attr` 提取类型与默认值；
+   * 配置后由 request-pack 的 `html2object`（`loop`）统一解析。
+   */
+  fields?: Record<string, FieldRule>
+  /** 文章链接选择器，默认 `a`（旧版写法，未配置 fields 时仍然生效） */
   linkSelector?: string
-  /** 列表标题选择器 */
+  /** 列表标题选择器（旧版写法，未配置 fields 时仍然生效） */
   titleSelector?: string
   /** 链接属性，默认 href */
   linkAttribute?: string
@@ -334,6 +340,11 @@ export interface CrawlRuleConfig {
   pagination?: PaginationConfig
   detail?: DetailRuleConfig
   fields?: Record<string, FieldRule>
+  /**
+   * 解析器插件链：在 html2object 提取完成之后、清洗入库之前依次执行，
+   * 用于重格式化数据（如图片地址解密）。按数组顺序调用。
+   */
+  parserPlugins?: string[]
   clean?: ContentCleanRule
   validate?: ValidateConfig
   browser?: BrowserRuleConfig

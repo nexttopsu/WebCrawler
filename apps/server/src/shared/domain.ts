@@ -51,6 +51,10 @@ export type CrawlTaskStatus = (typeof CrawlTaskStatus)[keyof typeof CrawlTaskSta
  * - `urls`：指定 URL 列表（仍走同一套规则与详情管道）
  * - `full`：全量（忽略增量跳过规则）
  * - `incremental`：增量（跳过已采集 URL 与早于时间窗口的内容）
+ * - `list`：仅列表采集——只抓列表页，命中即入库（title + url 必填），
+ *   文章 `detailStatus` 记为 `pending`，详情留待补采
+ * - `detail`：仅详情补采——只处理 `detailStatus ≠ collected` 的文章，
+ *   逐篇抓详情页，同名字段有值才覆盖列表阶段的值
  */
 export const CrawlTaskType = {
   SITE: 'site',
@@ -59,8 +63,26 @@ export const CrawlTaskType = {
   URLS: 'urls',
   FULL: 'full',
   INCREMENTAL: 'incremental',
+  LIST: 'list',
+  DETAIL: 'detail',
 } as const
 export type CrawlTaskType = (typeof CrawlTaskType)[keyof typeof CrawlTaskType]
+
+/**
+ * 文章详情采集状态。
+ *
+ * 与管理侧的 `ArticleStatus`（pending / published / ignored）互相独立：
+ * `detailStatus` 只回答「这篇文章的详情页抓过了没有」。
+ */
+export const ArticleDetailStatus = {
+  /** 已入库（列表阶段），详情未采集 */
+  PENDING: 'pending',
+  /** 详情已采集完成 */
+  COLLECTED: 'collected',
+  /** 详情采集失败，可重试 */
+  FAILED: 'failed',
+} as const
+export type ArticleDetailStatus = (typeof ArticleDetailStatus)[keyof typeof ArticleDetailStatus]
 
 /** 任务触发方式：手动创建 / 定时调度 / 失败重试。 */
 export const CrawlTaskTrigger = {

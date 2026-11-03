@@ -77,16 +77,16 @@ export function createApp(options: CreateAppOptions = {}): H3 {
   app.use(createRequestLogger(logger))
   app.use(createCorsMiddleware(config.corsOrigins))
 
-  const runtime = options.runtime ?? createAppRuntime({ config, request, logger })
+  const runtime = options.runtime ?? createAppRuntime({ config, request, logger, pluginRegistry: registry })
 
   // 让设置服务拿到真实配置作为默认值，并把已保存的设置作用到运行时：
   // 进程重启后并发、限速、日志级别、时区等仍然保持上次保存的值。
   setSettingDefaults(config)
   applySettings(readSettings(), { runtime: runtime.tasks, logger, config })
 
-  // 启动时按数据库里的启用状态重建注册表。
+  // 启动时按数据库里的启用状态重建注册表（含插件代码动态加载，异步执行）。
   // 不重建的话，进程重启后注册表是空的，所有插件都会被误判成「加载失败」。
-  refreshPlugins(registry)
+  void refreshPlugins(registry).catch(() => undefined)
 
   const serviceDeps = {
     request,

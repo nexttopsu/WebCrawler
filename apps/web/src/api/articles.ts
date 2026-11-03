@@ -15,6 +15,8 @@ export interface ArticleListParams {
   categoryId?: number
   taskId?: number
   status?: string
+  /** 详情采集状态：pending（仅列表入库）/ collected（已采集）/ failed（失败） */
+  detailStatus?: 'pending' | 'collected' | 'failed'
   publishedFrom?: string
   publishedTo?: string
   crawledFrom?: string

@@ -44,6 +44,8 @@ export interface ListTestRequestBody extends TesterRequestBase {
   list: {
     itemSelector: string
     itemSelectorType?: 'css' | 'xpath'
+    /** 字段配置写法：title / url 必填，其余自定义（与保存的规则同构） */
+    fields?: Record<string, FieldRule>
     linkSelector?: string
     linkAttribute?: string
     titleSelector?: string

@@ -52,6 +52,8 @@ const TASK_TYPE_LABEL: Record<CrawlTaskType, string> = {
   urls: '指定 URL 采集',
   full: '全量采集',
   incremental: '增量采集',
+  list: '仅列表采集',
+  detail: '详情补采',
 }
 
 const TASK_TRIGGER_LABEL = { manual: '手动创建', schedule: '定时调度', retry: '失败重试' } as const

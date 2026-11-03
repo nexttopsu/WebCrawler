@@ -6,10 +6,11 @@
  *
  * 单篇失败不会中断整批采集，错误按 URL 收集，供上层写 `crawl_error`。
  */
-import type { ArticleData, ArticleLink, CrawlContext, FieldRule, RequestMode } from '../shared/index.js'
+import type { ArticleData, ArticleLink, CrawlContext, FieldRule, ListRuleConfig, RequestMode } from '../shared/index.js'
 import { RequestError, RequestErrorCode, type BrowserClient, type RequestClient } from '../request/index.js'
 import { ParserError } from './errors.js'
 import { Parser, createParser } from './parser/index.js'
+import { extractListItems } from './parser/html2object-bridge.js'
 import { runPipeline, type PipelineResult } from './pipeline.js'
 import { getDocumentBase, resolveUrl } from './url.js'
 
@@ -21,11 +22,23 @@ export interface CrawlServices {
   browser: BrowserClient | null
 }
 
+/**
+ * 解析器插件执行器：按规则 `parserPlugins` 顺序对提取结果做重格式化。
+ * 由应用层实现（从插件注册表解析插件链），引擎只负责在正确时机调用。
+ */
+export type ParserPluginRunner = (
+  data: Record<string, unknown>,
+  context: CrawlContext,
+  source: { html: string; url: string },
+) => Promise<Record<string, unknown>>
+
 /** 创建引擎的配置。 */
 export interface CrawlEngineOptions {
   request: RequestClient
   parser?: Parser
   browser?: BrowserClient | null
+  /** 解析器插件执行器；规则未配置 parserPlugins 时不会被调用 */
+  parserPluginRunner?: ParserPluginRunner
 }
 
 /** 一次页面抓取的结果。 */
@@ -93,6 +106,7 @@ function errorMessage(error: unknown): string {
 /** 采集引擎。 */
 export class CrawlEngine {
   readonly services: CrawlServices
+  private readonly parserPluginRunner: ParserPluginRunner | null
 
   constructor(options: CrawlEngineOptions) {
     this.services = {
@@ -100,6 +114,7 @@ export class CrawlEngine {
       parser: options.parser ?? createParser(),
       browser: options.browser ?? null,
     }
+    this.parserPluginRunner = options.parserPluginRunner ?? null
   }
 
   /** 解析本次请求使用的模式。 */
@@ -199,9 +214,15 @@ export class CrawlEngine {
 
     const listUrl = listRule.url ?? context.category.listUrl ?? context.url
     const page = await this.fetchPage(context, listUrl)
-    const doc = this.services.parser.parseHtml(page.html)
     const base = getDocumentBase(page.html, page.finalUrl)
     const parser = this.services.parser
+
+    // 字段配置路径：html2object loop 一次解析全部列表项
+    if (listRule.fields) {
+      return this.listPageWithFields(listRule, page, base)
+    }
+
+    const doc = this.services.parser.parseHtml(page.html)
 
     const items = doc.selectAll(listRule.itemSelector, listRule.itemSelectorType ?? 'css')
     const links: ArticleLink[] = []
@@ -260,6 +281,72 @@ export class CrawlEngine {
     }
   }
 
+  /** 字段配置路径的列表提取：title / url 必填，其余字段进 metadata。 */
+  private listPageWithFields(
+    listRule: ListRuleConfig,
+    page: FetchedPage,
+    base: string,
+  ): ListPageResult {
+    const fields = listRule.fields ?? {}
+    const items = extractListItems(page.html, listRule.itemSelector, listRule.itemSelectorType, fields)
+    const parser = this.services.parser
+
+    const links: ArticleLink[] = []
+    const seen = new Set<string>()
+    let duplicateCount = 0
+
+    for (const item of items) {
+      const rawUrl = typeof item.url === 'string' ? item.url.trim() : ''
+      if (!rawUrl || /^(javascript|mailto|tel):/i.test(rawUrl)) {
+        duplicateCount += 1
+        continue
+      }
+      const absolute = parser.normalizeUrl(resolveUrl(rawUrl, base))
+      if (!/^https?:\/\//i.test(absolute)) {
+        duplicateCount += 1
+        continue
+      }
+      if (seen.has(absolute)) {
+        duplicateCount += 1
+        continue
+      }
+      seen.add(absolute)
+
+      const link: ArticleLink = { url: absolute, sourceUrl: page.finalUrl }
+      const title = typeof item.title === 'string' ? parser.cleanText(item.title) : ''
+      if (title) link.title = title
+
+      const coverRaw = [item.coverUrl, item.cover].find(
+        (value): value is string => typeof value === 'string' && value.trim() !== '',
+      )
+      if (coverRaw) {
+        const coverAbsolute = parser.normalizeUrl(resolveUrl(coverRaw.trim(), base))
+        if (/^https?:\/\//i.test(coverAbsolute)) link.coverUrl = coverAbsolute
+      }
+
+      // 其余自定义字段随链接带入 metadata，列表任务入库时写入 extra
+      const metadata: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(item)) {
+        if (key === 'title' || key === 'url' || key === 'cover' || key === 'coverUrl') continue
+        if (value === null || value === undefined || value === '') continue
+        metadata[key] = value
+      }
+      if (Object.keys(metadata).length > 0) link.metadata = metadata
+
+      links.push(link)
+    }
+
+    return {
+      links,
+      itemCount: items.length,
+      duplicateCount,
+      finalUrl: page.finalUrl,
+      status: page.status,
+      mode: page.mode,
+      elapsedMs: page.elapsedMs,
+    }
+  }
+
   /** 提取列表页中的文章链接（正式采集使用的精简结果）。 */
   async listLinks(context: CrawlContext): Promise<ArticleLink[]> {
     return (await this.listPage(context)).links
@@ -286,6 +373,14 @@ export class CrawlEngine {
       throw new ParserError('INVALID_FIELD_RULE', '规则缺少 detail.fields，无法提取详情字段')
     }
 
+    // 解析器插件链：规则配置了 parserPlugins 且运行时提供执行器时才启用
+    const pluginNames = context.rule.config.parserPlugins ?? []
+    const transform =
+      this.parserPluginRunner && pluginNames.length > 0
+        ? (data: Record<string, unknown>) =>
+            this.parserPluginRunner!(data, context, { html: page.html, url: page.finalUrl })
+        : undefined
+
     const result = await runPipeline(
       {
         siteId: context.site.id,
@@ -301,6 +396,7 @@ export class CrawlEngine {
           ...(link.title ? { listTitle: link.title } : {}),
           ...(link.metadata ?? {}),
         },
+        ...(transform ? { transform } : {}),
       },
       this.services.parser,
     )

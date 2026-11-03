@@ -154,6 +154,12 @@ export const articleFields = {
   status: 'TEXT',
   /** 规则中未映射到标准字段的其余字段（JSON） */
   extra: 'TEXT',
+  /** 详情采集状态：pending（仅列表入库）/ collected（详情已采集）/ failed（详情失败） */
+  detailStatus: 'TEXT',
+  /** 详情采集完成时间（ISO 8601） */
+  detailCollectedAt: 'TEXT',
+  /** 详情最近一次失败的摘要 */
+  detailError: 'TEXT',
   /** 本次抓取时间（ISO 8601） */
   crawlTime: 'TEXT',
 } as const satisfies ModelFields

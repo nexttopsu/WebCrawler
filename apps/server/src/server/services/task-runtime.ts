@@ -1,5 +1,6 @@
 import { getModels, type CrawlTaskRow } from '../../database/index.js'
 import { KeyedLimiter } from '../../core/index.js'
+import type { PluginRegistry } from '../../plugin-system/index.js'
 import {
   CrawlTaskStatus,
   type CrawlTaskTrigger,
@@ -29,6 +30,8 @@ import { writeLog } from './log-service.js'
 export interface TaskRuntimeOptions {
   request: RequestClient
   logger: Logger
+  /** 插件注册表：执行规则里的 parserPlugins 插件链 */
+  pluginRegistry?: PluginRegistry
   /** 全局同时执行的任务数 */
   concurrency?: number
   /** 单站点同时执行的任务数 */
@@ -83,7 +86,11 @@ export class TaskRuntime {
       maxDurationMs: options.maxDurationMs ?? 30 * 60 * 1000,
       retries: options.retries ?? 1,
     }
-    this.executor = new TaskExecutor({ request: options.request, logger: options.logger })
+    this.executor = new TaskExecutor({
+      request: options.request,
+      logger: options.logger,
+      pluginRegistry: options.pluginRegistry,
+    })
   }
 
   get activeCount(): number {

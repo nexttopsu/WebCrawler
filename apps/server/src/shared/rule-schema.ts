@@ -239,12 +239,22 @@ export function checkPagination(config: PaginationConfig | undefined): string[] 
   return errors
 }
 
+/** 列表页字段配置里必须存在的字段。 */
+export const REQUIRED_LIST_FIELDS = ['title', 'url'] as const
+
+/** 解析器插件名，与插件清单命名规则一致。 */
+const parserPluginNameSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, '解析器插件名不合法')
+
 /** 列表页规则。 */
 export const listRuleSchema = z
   .object({
     url: urlSchema('列表页地址').optional(),
     itemSelector: selectorSchema,
     itemSelectorType: z.enum(['css', 'xpath']).optional(),
+    fields: createFieldsMapSchema().optional(),
     linkSelector: selectorSchema.optional(),
     titleSelector: selectorSchema.optional(),
     linkAttribute: z
@@ -261,6 +271,18 @@ export const listRuleSchema = z
     pagination: paginationSchema.optional(),
   })
   .strict()
+  .superRefine((rule, ctx) => {
+    if (!rule.fields) return
+    for (const key of REQUIRED_LIST_FIELDS) {
+      if (!(key in rule.fields)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['fields'],
+          message: `列表字段配置缺少必填字段 "${key}"`,
+        })
+      }
+    }
+  })
 
 /** 详情页规则。 */
 export const detailRuleSchema = z
@@ -360,6 +382,8 @@ export const crawlRuleConfigSchema = z
     pagination: paginationSchema.optional(),
     detail: detailRuleSchema.optional(),
     fields: fieldsMapSchema.optional(),
+    /** 解析器插件链，按数组顺序在提取后执行 */
+    parserPlugins: z.array(parserPluginNameSchema).max(10).optional(),
     clean: contentCleanRuleSchema.optional(),
     validate: validateConfigSchema.optional(),
     browser: browserRuleSchema.optional(),

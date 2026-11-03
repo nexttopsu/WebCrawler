@@ -53,7 +53,7 @@ describe('GET /api/system/info', () => {
     expect(body.success).toBe(true)
     expect(body.data.name).toBe('WebCrawler')
     expect(body.data.runtime.node).toBe(process.version)
-    expect(body.data.database.schemaVersion).toBe(3)
+    expect(body.data.database.schemaVersion).toBe(4)
     expect(body.data.database.models).toHaveLength(12)
     expect(body.data.packages.map((item: { name: string }) => item.name)).toEqual([
       'shared',

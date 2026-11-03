@@ -59,7 +59,7 @@ export const taskCreateSchema = z
   .object({
     name: z.string().trim().min(1).max(100).optional(),
     siteId: idField,
-    type: z.enum(['site', 'category', 'batch', 'urls', 'full', 'incremental']),
+    type: z.enum(['site', 'category', 'batch', 'urls', 'full', 'incremental', 'list', 'detail']),
     categoryIds: z.array(idField).max(200).optional(),
     urls: z.array(z.string().trim().url().max(2048)).min(1).max(500).optional(),
     ruleOverride: z.unknown().optional(),
@@ -100,7 +100,7 @@ export const taskListQuerySchema = z.object({
   siteId: z.coerce.number().int().positive().optional(),
   scheduleId: z.coerce.number().int().positive().optional(),
   status: z.enum(['pending', 'running', 'paused', 'completed', 'failed', 'cancelled']).optional(),
-  type: z.enum(['site', 'category', 'batch', 'urls', 'full', 'incremental']).optional(),
+  type: z.enum(['site', 'category', 'batch', 'urls', 'full', 'incremental', 'list', 'detail']).optional(),
   trigger: z.enum(['manual', 'schedule', 'retry']).optional(),
   keyword: keywordField,
   from: z.string().datetime({ offset: true }).optional(),
@@ -130,6 +130,8 @@ const TYPE_LABEL: Record<CrawlTaskType, string> = {
   urls: '指定 URL 采集',
   full: '全量采集',
   incremental: '增量采集',
+  list: '仅列表采集',
+  detail: '详情补采',
 }
 
 /* -------------------------------------------------------------------------- */
@@ -335,7 +337,8 @@ export function buildTaskSnapshot(
     })
   }
 
-  const needList = input.type !== CrawlTaskType.URLS
+  // 详情补采不抓列表页，只要求规则里有详情字段
+  const needList = input.type !== CrawlTaskType.URLS && input.type !== CrawlTaskType.DETAIL
   const categories: TaskCategorySnapshot[] = []
   let primaryRule: BuiltSnapshot['primaryRule'] | null = null
 

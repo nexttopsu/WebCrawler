@@ -54,9 +54,9 @@ export function pluginRoutes(deps: ServiceDeps, registry: PluginRegistry): ApiRo
         const input = await parseOptionalBody(event, pluginStatusSchema)
         if (!input) {
           const current = getPlugin(name, registry)
-          return jsonOk(event, setPluginEnabled(name, !current.enabled, registry))
+          return jsonOk(event, await setPluginEnabled(name, !current.enabled, registry))
         }
-        return jsonOk(event, setPluginEnabled(name, input.enabled, registry))
+        return jsonOk(event, await setPluginEnabled(name, input.enabled, registry))
       },
     },
     {
@@ -74,16 +74,16 @@ export function pluginRoutes(deps: ServiceDeps, registry: PluginRegistry): ApiRo
       handler: async (event) => {
         const body = (await parseOptionalBody(event, scanBodySchema)) ?? {}
         const directory = body.directory ?? deps.config.pluginDir
-        const result = scanPlugins(directory, registry)
+        const result = await scanPlugins(directory, registry)
         // 扫描后统一按「数据库启用状态」重建注册表，避免禁用插件被扫描复活
-        refreshPlugins(registry)
+        await refreshPlugins(registry)
         return jsonOk(event, result)
       },
     },
     {
       method: 'POST',
       path: '/api/plugins/refresh',
-      handler: (event) => jsonOk(event, refreshPlugins(registry)),
+      handler: async (event) => jsonOk(event, await refreshPlugins(registry)),
     },
   ]
 }

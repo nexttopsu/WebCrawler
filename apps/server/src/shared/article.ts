@@ -1,4 +1,4 @@
-import type { ArticleStatus } from './domain.js'
+import type { ArticleDetailStatus, ArticleStatus } from './domain.js'
 
 /**
  * 文章数据的管理侧契约。
@@ -21,6 +21,15 @@ export interface ArticleSummaryDto {
   coverUrl: string | null
   publishedAt: string | null
   status: ArticleStatus
+  /**
+   * 详情采集状态：`pending`（仅列表入库）/ `collected`（详情已采集）/ `failed`（详情采集失败，可重试）。
+   * 与 `status`（管理状态）互相独立。
+   */
+  detailStatus: ArticleDetailStatus
+  /** 详情采集完成时间 */
+  detailCollectedAt: string | null
+  /** 详情最近一次失败的摘要 */
+  detailError: string | null
   contentHash: string | null
   wordCount: number
   imageCount: number

@@ -46,6 +46,29 @@ export interface SitePlugin extends CrawlerPlugin {
   parseDetail(context: CrawlContext, link?: ArticleLink): Promise<ArticleData>
 }
 
+/** 解析器插件的输入：html2object 提取完成的原始数据。 */
+export interface ParserTransformInput {
+  /** 提取结果（固定字段 + 自定义字段），插件可直接修改字段值 */
+  data: Record<string, unknown>
+  /** 当前页面的原始 HTML（清洗前），需要整页上下文时使用 */
+  html: string
+  /** 当前页面地址（绝对地址） */
+  url: string
+  /** 执行阶段：list = 列表字段提取后，detail = 详情字段提取后 */
+  stage: 'list' | 'detail'
+}
+
+/**
+ * 解析器插件：对提取完成的数据做重格式化（如图片地址解密）。
+ *
+ * 挂载点在字段提取之后、清洗入库之前；规则里通过 `parserPlugins`
+ * 按数组顺序链式调用，前一个插件的输出是后一个插件的输入。
+ */
+export interface ParserPlugin extends CrawlerPlugin {
+  /** 重格式化数据；返回处理后的字段对象 */
+  transform(input: ParserTransformInput): Promise<Record<string, unknown>> | Record<string, unknown>
+}
+
 /** 插件运行错误分类。 */
 export const PluginErrorCode = {
   /** 插件未初始化就调用了能力 */
@@ -87,6 +110,11 @@ export function isSitePlugin(plugin: CrawlerPlugin): plugin is SitePlugin {
     typeof candidate.getList === 'function' &&
     typeof candidate.parseDetail === 'function'
   )
+}
+
+/** 插件能力检测：判断对象是否实现了解析器插件契约。 */
+export function isParserPlugin(plugin: CrawlerPlugin): plugin is ParserPlugin {
+  return typeof (plugin as Partial<ParserPlugin>).transform === 'function'
 }
 
 /** 插件可用的解析器类型，便于插件作者标注。 */

@@ -40,6 +40,20 @@ import SavePanel from '@/components/tester/SavePanel.vue'
 
 /** 模板里不能出现 `://`，统一从脚本传占位文案。 */
 const LIST_URL_HINT = 'https://example.com/news'
+
+/** 列表字段的内置预设：title / url 必填（服务端 Schema 也强制要求）。 */
+const LIST_FIELD_PRESETS: Array<{
+  key: string
+  label: string
+  type: 'text' | 'html' | 'attr'
+  attribute?: string
+  multiple?: boolean
+  required?: boolean
+}> = [
+  { key: 'title', label: '标题', type: 'text', required: true },
+  { key: 'url', label: '文章链接', type: 'attr', attribute: 'href', required: true },
+  { key: 'cover', label: '封面图', type: 'attr', attribute: 'src' },
+]
 const draft = ref<TesterDraft>(loadTesterDraft() ?? createEmptyDraft())
 const { hasUnsavedChanges, flush } = useTesterDraft(draft)
 
@@ -195,8 +209,15 @@ async function runListTest(): Promise<void> {
       ...(draft.value.proxyId ? { proxyId: draft.value.proxyId } : {}),
       list: {
         itemSelector,
-        ...(draft.value.list.linkSelector.trim() ? { linkSelector: draft.value.list.linkSelector.trim() } : {}),
-        ...(draft.value.list.titleSelector.trim() ? { titleSelector: draft.value.list.titleSelector.trim() } : {}),
+        ...(Object.keys(listFieldsToRuleFields()).length > 0
+          ? { fields: listFieldsToRuleFields() }
+          : {}),
+        ...(Object.keys(listFieldsToRuleFields()).length === 0 && draft.value.list.linkSelector.trim()
+          ? { linkSelector: draft.value.list.linkSelector.trim() }
+          : {}),
+        ...(Object.keys(listFieldsToRuleFields()).length === 0 && draft.value.list.titleSelector.trim()
+          ? { titleSelector: draft.value.list.titleSelector.trim() }
+          : {}),
         ...(draft.value.list.coverSelector.trim()
           ? {
               coverSelector: draft.value.list.coverSelector.trim(),
@@ -283,9 +304,9 @@ async function runDetailTest(): Promise<void> {
 }
 
 /** 草稿字段 → Rule Schema 的 FieldRule（第三阶段格式，不另造格式）。 */
-function fieldsToRuleFields(): Record<string, FieldRule> {
+function draftFieldsToRuleFields(source: TesterFieldDraft[]): Record<string, FieldRule> {
   const output: Record<string, FieldRule> = {}
-  for (const field of draft.value.fields) {
+  for (const field of source) {
     if (!field.enabled) continue
     if (!field.selector.trim() && !field.defaultValue.trim()) continue
     const clean: FieldCleanRule = {}
@@ -304,6 +325,15 @@ function fieldsToRuleFields(): Record<string, FieldRule> {
   return output
 }
 
+function fieldsToRuleFields(): Record<string, FieldRule> {
+  return draftFieldsToRuleFields(draft.value.fields)
+}
+
+/** 列表字段配置 → FieldRule（title / url 必填由面板勾选「必填」表达）。 */
+function listFieldsToRuleFields(): Record<string, FieldRule> {
+  return draftFieldsToRuleFields(draft.value.list.listFields)
+}
+
 /* ------------------------------ 规则组装与保存 ------------------------------ */
 
 const ruleConfig = computed<CrawlRuleConfig | null>(() => {
@@ -316,10 +346,17 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
     request: { mode: draft.value.mode },
   }
   if (hasList) {
+    const listFieldRules = listFieldsToRuleFields()
+    const useFieldConfig = Object.keys(listFieldRules).length > 0
     config.list = {
       itemSelector: draft.value.list.itemSelector.trim(),
-      ...(draft.value.list.linkSelector.trim() ? { linkSelector: draft.value.list.linkSelector.trim() } : {}),
-      ...(draft.value.list.titleSelector.trim() ? { titleSelector: draft.value.list.titleSelector.trim() } : {}),
+      // 字段配置是推荐写法；配置了字段时旧版 link/title 选择器不再输出
+      ...(!useFieldConfig && draft.value.list.linkSelector.trim()
+        ? { linkSelector: draft.value.list.linkSelector.trim() }
+        : {}),
+      ...(!useFieldConfig && draft.value.list.titleSelector.trim()
+        ? { titleSelector: draft.value.list.titleSelector.trim() }
+        : {}),
       ...(draft.value.list.coverSelector.trim()
         ? {
             coverSelector: draft.value.list.coverSelector.trim(),
@@ -328,6 +365,7 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
               : {}),
           }
         : {}),
+      ...(useFieldConfig ? { fields: listFieldRules } : {}),
     }
     if (draft.value.list.paginationType !== 'none') {
       config.pagination = buildPagination()
@@ -346,6 +384,9 @@ function onImported(config: CrawlRuleConfig): void {
   draft.value.list.titleSelector = config.list?.titleSelector ?? ''
   draft.value.list.coverSelector = config.list?.coverSelector ?? ''
   draft.value.list.coverAttribute = config.list?.coverAttribute ?? ''
+  draft.value.list.listFields = Object.entries(config.list?.fields ?? {}).map(([key, rule]) =>
+    toFieldDraft(key, rule),
+  )
   const pagination = config.pagination
   draft.value.list.paginationType = pagination?.type ?? 'none'
   draft.value.list.paginationParameter = pagination?.parameter ?? 'page'
@@ -483,6 +524,13 @@ const requestInfo = computed(() => {
               @test="runListTest"
               @pick-detail="pickDetail"
             />
+            <FieldConfigPanel
+              v-model:fields="draft.list.listFields"
+              class="list-fields-panel"
+              title="列表字段配置（推荐）"
+              subtitle="title 与 url 必填；配置后 linkSelector / titleSelector 不再生效"
+              :built-ins="LIST_FIELD_PRESETS"
+            />
           </el-tab-pane>
 
           <el-tab-pane :label="`详情规则（${enabledFieldCount}）`" name="detail">
@@ -610,6 +658,12 @@ const requestInfo = computed(() => {
 
 .middle-tabs {
   height: 100%;
+}
+
+.list-fields-panel {
+  margin-top: 14px;
+  border-top: 1px solid var(--wb-border);
+  padding-top: 12px;
 }
 
 .middle-tabs :deep(.el-tabs__content) {

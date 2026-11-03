@@ -1,4 +1,5 @@
 import type { RequestClient } from '../request/index.js'
+import type { PluginRegistry } from '../plugin-system/index.js'
 import type { AppConfig } from './config.js'
 import type { Logger } from './lib/logger.js'
 import { flushProxyStats, startProxyStatsFlusher } from './services/proxy-stats.js'
@@ -28,6 +29,8 @@ export interface RuntimeInitOptions {
   config: AppConfig
   request: RequestClient
   logger: Logger
+  /** 插件注册表：任务执行器用它解析规则里的解析器插件链 */
+  pluginRegistry?: PluginRegistry
 }
 
 /** 创建（或替换）应用运行时。旧实例的定时器会被停止。 */
@@ -43,6 +46,7 @@ export function createAppRuntime(options: RuntimeInitOptions): AppRuntime {
   const tasks = new TaskRuntime({
     request: options.request,
     logger: options.logger,
+    pluginRegistry: options.pluginRegistry,
     concurrency: options.config.taskConcurrency,
     siteConcurrency: options.config.taskSiteConcurrency,
     rateLimitMs: options.config.taskRateLimitMs,

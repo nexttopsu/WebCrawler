@@ -6,10 +6,13 @@ import {
   delay,
   IntervalLimiter,
   PaginationError,
+  type ParserPluginRunner,
 } from '../../core/index.js'
 import { createBrowserClient, RequestError, type BrowserClient, type RequestClient } from '../../request/index.js'
+import type { PluginRegistry } from '../../plugin-system/index.js'
 import {
   CrawlTaskStatus,
+  CrawlTaskType,
   normalizeArticleUrl,
   type ArticleLink,
   type CrawlContext,
@@ -20,7 +23,14 @@ import {
   type TaskRunSummary,
 } from '../../shared/index.js'
 import type { Logger } from '../lib/logger.js'
-import { saveCrawledArticle, findArticleIdByUrl } from './article-service.js'
+import {
+  applyArticleDetail,
+  listArticlesForDetailCollect,
+  markArticleDetailFailed,
+  saveCrawledArticle,
+  saveListArticle,
+  findArticleIdByUrl,
+} from './article-service.js'
 import { assertProxyUsable, findSiteOrThrow, proxyToSettings } from './common.js'
 import { writeLog } from './log-service.js'
 import { recordProxyUsage } from './proxy-stats.js'
@@ -31,6 +41,8 @@ import { getTaskRow, normalizeTaskStatus, parseTaskCheckpoint, parseTaskSnapshot
 export interface TaskExecutorDeps {
   request: RequestClient
   logger: Logger
+  /** 插件注册表：解析规则里的 parserPlugins 插件链；缺省时不执行解析器插件 */
+  pluginRegistry?: PluginRegistry
 }
 
 /** 运行时注入的控制信号。 */
@@ -59,6 +71,15 @@ interface RunStats {
   totalPages: number
 }
 
+/** 任务配置快照里的 options 形状。 */
+type TaskOptionsLike = TaskConfigSnapshot['options']
+
+/** 行里的任务类型字符串 → 枚举；未知值按栏目采集处理。 */
+function normalizeTaskType(raw: string | null | undefined): CrawlTaskType {
+  const value = (raw ?? '') as CrawlTaskType
+  return (Object.values(CrawlTaskType) as string[]).includes(value) ? value : CrawlTaskType.CATEGORY
+}
+
 function errorInfo(error: unknown): { code: string; message: string; retryable: boolean } {
   if (error instanceof RequestError) {
     return { code: error.code, message: error.message, retryable: error.retryable }
@@ -81,6 +102,27 @@ function hostnameOf(url: string): string {
     return new URL(url).hostname
   } catch {
     return ''
+  }
+}
+
+/** 规则里配置的 parserPlugins → 依次执行的插件链运行器。 */
+function createParserPluginRunner(registry: PluginRegistry): ParserPluginRunner {
+  return async (data, context, source) => {
+    const names = context.rule.config.parserPlugins ?? []
+    let current = data
+    for (const name of names) {
+      const plugin = registry.getParserPlugin(name)
+      if (!plugin) {
+        throw new Error(`解析器插件 "${name}" 未加载或不是 parser 类型，请检查插件管理页`)
+      }
+      current = await plugin.transform({
+        data: current,
+        html: source.html,
+        url: source.url,
+        stage: 'detail',
+      })
+    }
+    return current
   }
 }
 
@@ -154,7 +196,13 @@ export class TaskExecutor {
       }
     }
 
-    const engine = new CrawlEngine({ request: this.deps.request, browser })
+    const engine = new CrawlEngine({
+      request: this.deps.request,
+      browser,
+      parserPluginRunner: this.deps.pluginRegistry
+        ? createParserPluginRunner(this.deps.pluginRegistry)
+        : undefined,
+    })
     const errors: string[] = []
     let lastFlushAt = 0
 
@@ -189,7 +237,13 @@ export class TaskExecutor {
           ? [{ category: snapshot.categories[0]!, urls: snapshot.urls }]
           : snapshot.categories.map((category) => ({ category, urls: [] }))
 
-      for (const target of targets) {
+      const taskType = normalizeTaskType(row.type)
+      if (taskType === CrawlTaskType.LIST) {
+        await this.runListStage({ taskId, snapshot, targets, engine, options, stats, checkpoint, seen, processed, completedCategories, signal, aborted, limiter, flush, errors, loggerOf: (category) => this.createCrawlLogger(taskId, snapshot.siteId, category.categoryId) })
+      } else if (taskType === CrawlTaskType.DETAIL) {
+        await this.runDetailStage({ taskId, snapshot, targets, engine, options, stats, checkpoint, processed, completedCategories, signal, aborted, limiter, flush, errors, loggerOf: (category) => this.createCrawlLogger(taskId, snapshot.siteId, category.categoryId) })
+      } else {
+        for (const target of targets) {
         if (aborted() || paused()) break
         const { category } = target
         if (completedCategories.has(category.categoryId)) continue
@@ -350,6 +404,7 @@ export class TaskExecutor {
           checkpoint.page = 0
         }
         flush(true)
+      }
       }
     } finally {
       flush(true)
@@ -532,9 +587,344 @@ export class TaskExecutor {
     return { status: 'failed', reason: `「${link.title ?? link.url}」抓取失败：${message}` }
   }
 
+  /**
+   * 仅列表采集：抓列表页（含分页），命中即入库（title + url 必填），
+   * detailStatus 记为 pending，详情由「详情补采」任务单独处理。
+   */
+  private async runListStage(input: {
+    taskId: number
+    snapshot: TaskConfigSnapshot
+    targets: Array<{ category: TaskCategorySnapshot; urls: string[] }>
+    engine: CrawlEngine
+    options: TaskOptionsLike
+    stats: RunStats
+    checkpoint: TaskCheckpoint
+    seen: Set<string>
+    processed: Set<string>
+    completedCategories: Set<number>
+    signal: AbortSignal
+    aborted: () => boolean
+    limiter: IntervalLimiter
+    flush: (force: boolean) => void
+    errors: string[]
+    loggerOf: (category: TaskCategorySnapshot) => CrawlLogger
+  }): Promise<void> {
+    const { taskId, snapshot, stats, checkpoint, processed, completedCategories, flush, errors, engine } = input
+
+    for (const target of input.targets) {
+      if (input.aborted()) break
+      const { category } = target
+      if (completedCategories.has(category.categoryId)) continue
+
+      const proxy = this.resolveProxy(category, errors)
+      const categoryKey = `${snapshot.siteId}:${category.categoryId}`
+      const logger = input.loggerOf(category)
+
+      let pageUrls: string[]
+      try {
+        if (target.urls.length > 0) {
+          pageUrls = target.urls
+        } else {
+          const pagination = category.config.list?.pagination ?? category.config.pagination
+          const maxPages = input.options.maxPages ?? pagination?.maxPages ?? 1
+          pageUrls =
+            input.options.followPagination === false
+              ? [category.listUrl]
+              : buildPageUrls(category.listUrl, pagination, maxPages)
+        }
+      } catch (error) {
+        const info = errorInfo(error)
+        stats.failed += 1
+        errors.push(`栏目「${category.name}」分页配置不可执行：${info.message}`)
+        completedCategories.add(category.categoryId)
+        flush(true)
+        continue
+      }
+
+      const pageCount = target.urls.length > 0 ? 1 : pageUrls.length
+      stats.totalPages = Math.max(stats.totalPages, pageCount)
+      let categoryFailed = false
+
+      for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+        if (input.aborted()) break
+        const pageUrl = pageUrls[pageIndex]!
+        stats.currentPage = pageIndex + 1
+        checkpoint.page = pageIndex + 1
+
+        let links: ArticleLink[]
+        try {
+          const page = await input.limiter.run(
+            categoryKey,
+            () => engine.listPage(this.buildContext(snapshot, category, pageUrl, input.signal, proxy, taskId, logger)),
+            input.signal,
+          )
+          links = page.links
+          writeLog({
+            taskId,
+            siteId: snapshot.siteId,
+            categoryId: category.categoryId,
+            url: page.finalUrl,
+            level: 'debug',
+            stage: 'list',
+            message: `列表页第 ${pageIndex + 1} 页命中 ${page.itemCount} 个列表项，提取 ${page.links.length} 条链接`,
+            detail: { duplicateCount: page.duplicateCount },
+          })
+        } catch (error) {
+          if (input.aborted()) break
+          const info = errorInfo(error)
+          stats.failed += 1
+          categoryFailed = true
+          errors.push(`栏目「${category.name}」第 ${pageIndex + 1} 页列表抓取失败：${info.message}`)
+          writeLog({
+            taskId,
+            siteId: snapshot.siteId,
+            categoryId: category.categoryId,
+            url: pageUrl,
+            level: 'error',
+            stage: 'list',
+            message: `列表抓取失败：${info.message}`,
+            detail: { code: info.code },
+          })
+          continue
+        }
+
+        for (const link of links) {
+          if (input.aborted()) break
+          const normalized = normalizeArticleUrl(link.url)
+          if (input.seen.has(normalized)) continue
+          input.seen.add(normalized)
+          if (processed.has(normalized)) {
+            stats.skipped += 1
+            checkpoint.lastUrl = normalized
+            flush(false)
+            continue
+          }
+
+          const outcome = saveListArticle({
+            siteId: snapshot.siteId,
+            categoryId: category.categoryId > 0 ? category.categoryId : null,
+            taskId,
+            title: link.title ?? '',
+            url: link.url,
+            coverUrl: link.coverUrl ?? null,
+            ...(link.metadata ? { extra: link.metadata } : {}),
+          })
+
+          processed.add(normalized)
+          checkpoint.lastUrl = normalized
+          if (outcome.status === 'created') {
+            stats.total += 1
+            stats.success += 1
+          } else {
+            stats.skipped += 1
+            if (outcome.reason && outcome.reason !== '已存在') {
+              errors.push(`「${link.title ?? link.url}」列表入库跳过：${outcome.reason}`)
+            }
+          }
+          flush(false)
+        }
+        flush(true)
+      }
+
+      if (!categoryFailed) {
+        completedCategories.add(category.categoryId)
+        checkpoint.page = 0
+      }
+      flush(true)
+    }
+  }
+
+  /**
+   * 详情补采：只处理 detailStatus ≠ collected 的文章，逐篇抓详情页，
+   * 同名字段有值才覆盖列表阶段的值；成功置 collected、失败置 failed（可重试）。
+   */
+  private async runDetailStage(input: {
+    taskId: number
+    snapshot: TaskConfigSnapshot
+    targets: Array<{ category: TaskCategorySnapshot; urls: string[] }>
+    engine: CrawlEngine
+    options: TaskOptionsLike
+    stats: RunStats
+    checkpoint: TaskCheckpoint
+    processed: Set<string>
+    completedCategories: Set<number>
+    signal: AbortSignal
+    aborted: () => boolean
+    limiter: IntervalLimiter
+    flush: (force: boolean) => void
+    errors: string[]
+    loggerOf: (category: TaskCategorySnapshot) => CrawlLogger
+  }): Promise<void> {
+    const { taskId, snapshot, stats, checkpoint, processed, completedCategories, flush, errors } = input
+    const dedupeByContentHash = input.options.dedupeByContentHash !== false
+
+    for (const target of input.targets) {
+      if (input.aborted()) break
+      const { category } = target
+      if (completedCategories.has(category.categoryId)) continue
+
+      const proxy = this.resolveProxy(category, errors)
+      const categoryKey = `${snapshot.siteId}:${category.categoryId}`
+      const logger = input.loggerOf(category)
+
+      // 分批拉取待补采文章，直到没有新的待处理记录或任务被中断
+      for (;;) {
+        if (input.aborted()) break
+        const pending = listArticlesForDetailCollect({
+          siteId: snapshot.siteId,
+          categoryId: category.categoryId > 0 ? category.categoryId : null,
+          excludeUrls: processed,
+          limit: 100,
+        })
+        if (pending.length === 0) break
+
+        for (const article of pending) {
+          if (input.aborted()) break
+          const normalized = normalizeArticleUrl(article.url)
+          if (processed.has(normalized)) continue
+          stats.total += 1
+
+          const link: ArticleLink = { url: article.url, sourceUrl: article.url }
+          if (article.title) link.title = article.title
+
+          const outcome = await this.processDetailArticle({
+            taskId,
+            snapshot,
+            category,
+            link,
+            articleId: article.id,
+            proxy,
+            categoryKey,
+            limiter: input.limiter,
+            engine: input.engine,
+            signal: input.signal,
+            logger,
+            retries: input.options.retries ?? 1,
+            dedupeByContentHash,
+          })
+
+          processed.add(normalized)
+          checkpoint.lastUrl = normalized
+          if (outcome.status === 'failed') {
+            stats.failed += 1
+            errors.push(outcome.reason)
+          } else {
+            stats.success += 1
+          }
+          flush(false)
+        }
+        flush(true)
+      }
+
+      completedCategories.add(category.categoryId)
+      flush(true)
+    }
+  }
+
+  /** 补采单篇详情：抓取（含重试）→ 解析 → 合并入库（有值才覆盖）。 */
+  private async processDetailArticle(input: {
+    taskId: number
+    snapshot: TaskConfigSnapshot
+    category: TaskCategorySnapshot
+    link: ArticleLink
+    articleId: number
+    proxy: ReturnType<typeof proxyToSettings> | null
+    categoryKey: string
+    limiter: IntervalLimiter
+    engine: CrawlEngine
+    signal: AbortSignal
+    logger: CrawlLogger
+    retries: number
+    dedupeByContentHash: boolean
+  }): Promise<{ status: 'success' | 'failed'; reason: string }> {
+    const { taskId, snapshot, category, link, proxy, categoryKey, limiter, engine, signal } = input
+    const attempts = Math.max(1, (input.retries ?? 0) + 1)
+    let lastError: { code: string; message: string } | null = null
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const context = this.buildContext(snapshot, category, link.url, signal, proxy, taskId, input.logger)
+        const { result, page } = await limiter.run(
+          categoryKey,
+          () => engine.fetchAndParse(context, link),
+          signal,
+        )
+
+        if (category.proxyId) recordProxyUsage(category.proxyId, true)
+
+        if (!result.article) {
+          const message = result.errors.join('；') || '数据校验未通过'
+          markArticleDetailFailed(link.url, message)
+          writeLog({
+            taskId,
+            siteId: snapshot.siteId,
+            categoryId: category.categoryId,
+            url: link.url,
+            level: 'warn',
+            stage: 'validate',
+            message: `详情补采未通过校验：${message}`,
+            detail: { missing: result.missing, articleId: input.articleId },
+          })
+          return { status: 'failed', reason: `「${link.title ?? link.url}」校验失败：${message}` }
+        }
+
+        const outcome = applyArticleDetail({
+          article: result.article,
+          siteId: snapshot.siteId,
+          categoryId: category.categoryId > 0 ? category.categoryId : null,
+          taskId,
+          rawHtml: page.html,
+        })
+
+        if (outcome.status === 'skipped') {
+          writeLog({
+            taskId,
+            siteId: snapshot.siteId,
+            categoryId: category.categoryId,
+            url: link.url,
+            level: 'debug',
+            stage: 'save',
+            message: `详情补采跳过：${outcome.reason ?? '内容未变化'}`,
+            detail: { articleId: input.articleId },
+          })
+        }
+        return { status: 'success', reason: outcome.reason ?? '' }
+      } catch (error) {
+        if (signal.aborted) {
+          return { status: 'failed', reason: `「${link.url}」请求被取消` }
+        }
+        const info = errorInfo(error)
+        lastError = info
+        if (category.proxyId) recordProxyUsage(category.proxyId, false)
+        if (info.retryable && attempt < attempts) {
+          try {
+            await delay(RETRY_BACKOFF_MS * attempt, signal)
+          } catch {
+            return { status: 'failed', reason: `「${link.url}」重试等待时被取消` }
+          }
+          continue
+        }
+        break
+      }
+    }
+
+    const message = lastError?.message ?? '未知错误'
+    markArticleDetailFailed(link.url, message)
+    writeLog({
+      taskId,
+      siteId: snapshot.siteId,
+      categoryId: category.categoryId,
+      url: link.url,
+      level: 'error',
+      stage: 'request',
+      message: `详情补采失败：${message}`,
+      detail: { code: lastError?.code ?? 'UNKNOWN', articleId: input.articleId },
+    })
+    return { status: 'failed', reason: `「${link.title ?? link.url}」详情补采失败：${message}` }
+  }
+
   /** 解析该栏目使用的代理；代理不可用时记录错误并返回 null（直连）。 */
-  private resolveProxy(category: TaskCategorySnapshot, errors: string[]) {
-    // 优先级：栏目（快照里已含站点默认）> 系统默认代理 > 直连
+  private resolveProxy(category: TaskCategorySnapshot, errors: string[]) {    // 优先级：栏目（快照里已含站点默认）> 系统默认代理 > 直连
     const proxyId = category.proxyId ?? getSettings().defaultProxyId
     if (!proxyId) return null
     try {
@@ -657,7 +1047,9 @@ export function snapshotIsRunnable(snapshot: TaskConfigSnapshot | null): boolean
   return snapshot.categories.every((category) => {
     const config = category.config
     if (!config || typeof config !== 'object') return false
-    return Boolean(config.list?.itemSelector)
+    // 列表采集需要列表选择器；详情补采只需要详情字段
+    if (config.list?.itemSelector) return true
+    return Object.keys(config.detail?.fields ?? config.fields ?? {}).length > 0
   })
 }
 

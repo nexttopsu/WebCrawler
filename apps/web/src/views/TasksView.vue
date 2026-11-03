@@ -59,6 +59,8 @@ const TASK_TYPE_LABEL: Record<CrawlTaskType, string> = {
   urls: '指定 URL',
   full: '全量',
   incremental: '增量',
+  list: '仅列表',
+  detail: '详情补采',
 }
 
 const TASK_TRIGGER_LABEL = {
@@ -475,7 +477,16 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
             <el-radio-button value="site">全站</el-radio-button>
             <el-radio-button value="full">全量</el-radio-button>
             <el-radio-button value="incremental">增量</el-radio-button>
+            <el-radio-button value="list">仅列表</el-radio-button>
+            <el-radio-button value="detail">详情补采</el-radio-button>
           </el-radio-group>
+          <p v-if="form.type === 'list' || form.type === 'detail'" class="form-hint">
+            {{
+              form.type === 'list'
+                ? '仅抓取列表页并入库（标题 + 链接），文章详情状态记为「待采集」，详情由「详情补采」任务单独抓取。'
+                : '只处理详情状态为「待采集」或「失败」的文章，逐篇抓取详情页；同名字段有值才覆盖列表阶段的数据。'
+            }}
+          </p>
         </el-form-item>
 
         <el-form-item v-if="needSite" label="所属网站" prop="siteId">
