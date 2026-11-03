@@ -222,7 +222,7 @@ pnpm --filter @webcrawler/core demo:crawl
 | --- | --- | --- |
 | GET | `/api/health` | 健康检查（含版本与数据库状态） |
 | GET | `/api/system/info` | 运行信息，`?verbose=true` 追加内存与监听信息 |
-| GET / POST | `/api/sites` | 站点列表（`page`/`pageSize`/`keyword`/`status`/`pluginName`）/ 新建站点 |
+| GET / POST | `/api/sites` | 站点列表（`page`/`pageSize`/`keyword`/`status`/`pluginName`）/ 新建站点（域名从 `baseUrl` 主机名自动获取，无需提交 `domain`） |
 | GET / PUT / PATCH / DELETE | `/api/sites/:id` | 详情（含栏目/规则/任务/文章计数）、全量替换、部分更新、删除 |
 | PATCH | `/api/sites/:id/status` | 启用 / 停用 |
 | POST | `/api/sites/:id/test` | 连接测试：发一次 GET，返回状态码、耗时与 `<title>` |
@@ -282,6 +282,7 @@ pnpm --filter @webcrawler/core demo:crawl
       "title": { "type": "text", "selector": "h1", "required": true },
       "content": { "type": "html", "selector": ".article-content" },
       "images": { "type": "attr", "selector": "img", "attribute": "src", "multiple": true },
+      "cover": { "type": "attr", "selector": ".article-cover img", "attribute": "src" },
       "author": { "type": "text", "selector": ".author", "defaultValue": "佚名" }
     }
   },
@@ -295,6 +296,8 @@ pnpm --filter @webcrawler/core demo:crawl
 - `selectorType`：`css`（默认）或 `xpath`。XPath 使用独立适配器，不做字符串替换伪装。
 - `jsonPath`：JSON 响应使用，如 `data.items[*].url`。
 - `required` / `defaultValue` / `multiple` / `clean`：必填、兜底、多值与字段级清洗。
+- 标准字段：`title` / `author` / `publishTime` / `content` / `html` / `images` / `cover`（或 `coverUrl`）；
+  其余字段名进入文章的 `extra` 扩展 JSON。封面图是**预留字段且允许为空**：规则没映射、页面没有或地址不是 http(s) 时为 `null`。
 - 字段名需匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，嵌套深度上限 8 层（防止递归爆栈）。
 - `detail.fields` 与顶层 `fields` 不允许同时出现；`request.mode=http` 与 `browser.enabled=true` 互斥，冲突时报错而不是「后者静默生效」。
 
@@ -396,7 +399,8 @@ pnpm --filter @webcrawler/core demo:crawl
 
 ## 结果与去重
 
-- `ArticleData` 同时保存 `content`（纯文本）、`html`（清洗并转绝对地址）、`images`（去重后的绝对地址）、`contentHash`（标题 + 正文的 SHA-256）。
+- `ArticleData` 同时保存 `content`（纯文本）、`html`（清洗并转绝对地址）、`images`（去重后的绝对地址）、`coverUrl`（封面图，可为空）、`contentHash`（标题 + 正文的 SHA-256）。
+- 封面图落库规则：规则映射的 `cover` / `coverUrl` 优先（相对地址按文章地址补全），缺省回退正文首图，两者都没有则为 `NULL`；只接受 http(s)，不把伪协议写进库。
 - `contentHash` 用于增量去重：同一页面重复采集得到相同 Hash，命中即 `skipped` 且不覆盖原记录。
 - 单篇失败不会中断整批采集，错误按 URL 收集（`stage` / `code` / `message`）并写入任务日志。
 
@@ -467,7 +471,7 @@ running ──▶ cancelled
 ### 文章与导出
 
 - 列表走 `runRawList`（参数绑定 + `ESCAPE '\'`），关键词命中标题 / 摘要 / 正文。
-- `rawHtml` 入库截断 512 KB，`extra` 截断 16 KB，`images` 存 JSON 数组。
+- `rawHtml` 入库截断 512 KB，`extra` 截断 16 KB，`images` 存 JSON 数组；`coverUrl` 为空时导出为空单元格，不补默认图。
 - 导出用 `ReadableStream` + 分批 SQL（`LIMIT/OFFSET`，每批 200），单次硬上限 5000 条，CSV 带 BOM + CRLF，避免 Excel 乱码。
 
 ### 代理与密码
@@ -515,7 +519,7 @@ ORMlet 只接受 `TEXT` / `INTEGER` / `REAL` / `BLOB`，不支持 `NOT NULL`、`
 | 路由 | 页面 | 主要能力 |
 | --- | --- | --- |
 | `/` | 仪表盘 | 网站/栏目/文章总数、今日采集、执行中任务、近 30 天成功率、代理可用、14 天趋势图（ECharts）、最近任务、最近错误 |
-| `/sites` | 网站管理 | 列表 / 新增 / 编辑 / 删除 / 测试连接 / 启停 / 搜索筛选 / 跳转栏目管理 |
+| `/sites` | 网站管理 | 列表 / 新增 / 编辑 / 删除 / 测试连接 / 启停 / 搜索筛选 / 跳转栏目管理（域名不手填，由站点地址自动获取） |
 | `/categories` | 栏目管理 | 列表 / 新增 / 编辑 / 删除 / 网站筛选 / 规则与代理绑定 / 启停 / 单栏目采集 / 批量采集 / 试采 |
 | `/rules` | 采集规则 | 列表 / 新建 / 编辑 / 复制 / 删除 / 导入 JSON / 导出 JSON / 版本时间线 / 跳转测试器 |
 | `/tester` | 规则测试器 | 三栏可拖动：页面加载、HTTP / Browser 切换、代理选择、DOM 快照、悬停高亮、点选生成 Selector、列表与详情测试、保存规则 |
