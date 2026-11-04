@@ -6,6 +6,8 @@ import { RefreshCw } from '@lucide/vue'
 const props = defineProps<{
   /** 列表模式配置（v-model 系列字段） */
   itemSelector: string
+  /** 选中全流程列表插件：列表由插件整段返回，只需填写分页方式 */
+  pluginMode?: boolean
   paginationType: 'none' | 'query' | 'path' | 'next' | 'cursor'
   paginationParameter: string
   paginationPathPattern: string
@@ -51,7 +53,7 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
 <template>
   <div class="list-config">
     <div class="config-grid">
-      <label class="span-2">
+      <label v-if="!pluginMode" class="span-2">
         <span>列表项容器 itemSelector *</span>
         <el-input
           :model-value="itemSelector"
@@ -60,6 +62,9 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
           @update:model-value="emit('update:itemSelector', $event)"
         />
       </label>
+      <p v-else class="span-2 plugin-note">
+        列表由全流程插件返回，无需选择器与列表字段；只需设置下方分页方式。
+      </p>
       <label>
         <span>分页方式</span>
         <el-select
@@ -108,7 +113,7 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
         type="primary"
         size="small"
         :loading="testing"
-        :disabled="!itemSelector"
+        :disabled="!pluginMode && !itemSelector"
         :icon="RefreshCw"
         @click="emit('test')"
       >
@@ -164,6 +169,13 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
 
 .span-2 {
   grid-column: span 2;
+}
+
+.plugin-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--wb-text-muted);
 }
 
 

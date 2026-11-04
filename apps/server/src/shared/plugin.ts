@@ -1,47 +1,35 @@
 /**
  * 插件管理的对外结构。
  *
- * 密码类配置不会出现在这里：插件的 `config` 由服务端做敏感字段脱敏后再返回。
+ * 插件全部内置：列表来自 `src/plugins` 的静态清单，没有「扫描」「登记」这类写操作，
+ * 所以结构里不再有配置 JSON、入口文件路径这些来自磁盘的字段。
  */
 import type { PluginType } from './domain.js'
 
-/** 插件清单状态。 */
-export type PluginStatus = 'enabled' | 'disabled' | 'incompatible' | 'invalid'
+/** 插件状态：启用 / 用户手动停用 / 实现有问题 */
+export type PluginStatus = 'enabled' | 'disabled' | 'invalid'
 
 /** 插件列表项。 */
 export interface PluginDto {
-  id: number | null
+  /** 稳定标识：规则里引用它 */
+  pluginId: string
+  /** 显示名称 */
   name: string
   version: string
   type: PluginType | string
-  /** 插件入口（文件路径或模块名），为空表示内置插件 */
-  entry: string | null
+  /** 支持的位置（由实现的函数推导）：list = 列表、detail = 详情 */
+  slots: Array<'list' | 'detail'>
+  /** 内置源码位置，例如 `src/plugins/demo-fixture.ts` */
+  source: string
   description: string | null
-  /** 兼容的核心版本范围，例如 `^0.5.0` */
-  coreVersion: string | null
+  /** 是否启用（用户在界面上控制，存数据库） */
+  enabled: boolean
   /** 是否已在运行时注册表中 */
   registered: boolean
-  enabled: boolean
   status: PluginStatus
-  /** 不兼容或加载失败的原因 */
+  /** 实现有问题时的原因 */
   error: string | null
-  config: Record<string, unknown> | null
-  createdAt: string | null
   updatedAt: string | null
-}
-
-/** 扫描/刷新结果。 */
-export interface PluginScanResultDto {
-  scannedAt: string
-  /** 扫描的目录 */
-  directory: string
-  /** 目录是否存在；不存在时视为「没有本地插件」，不是错误 */
-  exists: boolean
-  found: number
-  added: number
-  updated: number
-  /** 加载失败（清单非法、核心版本不兼容、同名重复等） */
-  failed: Array<{ name: string; path: string; error: string }>
 }
 
 /** 插件错误日志条目。 */

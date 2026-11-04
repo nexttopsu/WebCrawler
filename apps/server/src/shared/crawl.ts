@@ -185,9 +185,6 @@ export interface CrawlContext {
 /** 字段提取类型。 */
 export type FieldType = 'text' | 'html' | 'attr' | 'list' | 'object'
 
-/** 选择器类型。xpath 与 css 走不同适配器，不做字符串转换。 */
-export type SelectorType = 'css' | 'xpath'
-
 /** 清理规则：作用在字段值上，按顺序执行。 */
 export interface FieldCleanRule {
   /** 去除首尾空白，默认 true */
@@ -204,10 +201,8 @@ export interface FieldCleanRule {
 export interface FieldRule {
   /** 提取类型 */
   type: FieldType
-  /** CSS 选择器或 XPath 表达式；object/list 省略时表示当前节点 */
+  /** CSS 选择器；object/list 省略时表示当前节点 */
   selector?: string
-  /** 选择器类型，默认 css */
-  selectorType?: SelectorType
   /** type=attr 时的属性名 */
   attribute?: string
   /** 是否提取多个值；type=list 时始终为数组 */
@@ -225,12 +220,15 @@ export interface FieldRule {
 
 /** 列表页规则。 */
 export interface ListRuleConfig {
+  /**
+   * 全流程插件 id：配置后由插件接管列表页解析，`itemSelector` 与列表字段不再需要，
+   * 只需保留分页配置（平台按页码生成地址后逐个交给插件）。
+   */
+  plugin?: string
   /** 列表页地址；省略时使用栏目的 listUrl */
   url?: string
-  /** 列表项容器 */
-  itemSelector: string
-  /** 列表项容器选择器类型 */
-  itemSelectorType?: SelectorType
+  /** 列表项容器；配置了 `plugin` 时可省略 */
+  itemSelector?: string
   /**
    * 列表字段配置（推荐写法）：`title` 与 `url` 必填，其余字段自定义。
    * 每个字段支持 `text` / `html` / `attr` 提取类型与默认值；
@@ -282,6 +280,11 @@ export interface PaginationConfig {
 
 /** 详情页规则。 */
 export interface DetailRuleConfig {
+  /**
+   * 全流程插件 id：配置后由插件抓取并解析详情页，`fields` 不再需要。
+   * 插件返回的字段直接进入入库层（平台仍做 URL 归一化与标题校验）。
+   */
+  plugin?: string
   method?: 'GET' | 'POST'
   /** 字段映射；未设置时使用规则顶层的 fields */
   fields?: Record<string, FieldRule>

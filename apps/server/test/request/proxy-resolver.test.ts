@@ -12,10 +12,7 @@ function catchError(fn: () => unknown): RequestError {
 import {
   RequestError,
   RequestErrorCode,
-  assertProxyUsable,
-  createProxyAgents,
   formatProxyForLog,
-  isSocksProxy,
   parseProxyUrl,
   resolveProxy,
   toNativeProxyConfig,
@@ -32,8 +29,8 @@ describe('parseProxyUrl', () => {
     })
   })
 
-  it('解析 SOCKS5 代理并补默认端口', () => {
-    expect(parseProxyUrl('socks5://10.0.0.9')).toEqual({ protocol: 'socks5', host: '10.0.0.9', port: 1080 })
+  it('拒绝 SOCKS 代理（只支持 http / https）', () => {
+    expect(catchError(() => parseProxyUrl('socks5://10.0.0.9')).code).toBe(RequestErrorCode.UNSUPPORTED)
   })
 
   it('省略协议时按 HTTP 处理', () => {
@@ -70,28 +67,12 @@ describe('代理配置转换与脱敏', () => {
     expect(formatProxyForLog(null)).toBe('direct')
   })
 
-  it('HTTP 代理转换为 request-pack 原生配置', () => {
+  it('HTTP 代理转换为原生 proxy 配置', () => {
     expect(toNativeProxyConfig(proxy)).toEqual({
       protocol: 'http',
       host: '127.0.0.1',
       port: 8080,
       auth: { username: 'u', password: 'p' },
     })
-  })
-
-  it('SOCKS5 走独立 Agent，不能交给原生 proxy 配置', () => {
-    const socks = { protocol: 'socks5' as const, host: '127.0.0.1', port: 1080 }
-    expect(isSocksProxy(socks)).toBe(true)
-    expect(catchError(() => toNativeProxyConfig(socks)).code).toBe(RequestErrorCode.UNSUPPORTED)
-
-    const agents = createProxyAgents(socks)
-    expect(agents.httpAgent).toBe(agents.httpsAgent)
-    expect(agents.httpAgent.constructor.name).toContain('SocksProxyAgent')
-  })
-
-  it('SOCKS4 明确报不支持，而不是静默直连', () => {
-    expect(catchError(() => assertProxyUsable({ protocol: 'socks4', host: '127.0.0.1', port: 1080 })).code).toBe(
-      RequestErrorCode.UNSUPPORTED,
-    )
   })
 })

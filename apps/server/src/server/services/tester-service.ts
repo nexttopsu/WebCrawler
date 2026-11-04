@@ -13,7 +13,7 @@
 import type { ProxyRow } from '../../database/index.js'
 import { CrawlEngine, ParserError, cleanHtml, createParser } from '../../core/index.js'
 import type { PluginRegistry } from '../../plugin-system/index.js'
-import { createParserPluginRunner } from './task-executor.js'
+import { createFlowPluginRunner, createParserPluginRunner } from './task-executor.js'
 import {
   createBrowserClient,
   RequestError,
@@ -27,6 +27,7 @@ import {
   parseRuleConfig,
 } from '../../shared/index.js'
 import type {
+  ArticleData,
   CrawlContext,
   CrawlLogger,
   CrawlRequestOptions,
@@ -101,8 +102,9 @@ export const snapshotBodySchema = testerBaseSchema
 export const listTestBodySchema = testerBaseSchema.extend({
   list: z
     .object({
-      itemSelector: z.string().trim().min(1, '列表项选择器必填').max(500),
-      itemSelectorType: z.enum(['css', 'xpath']).optional(),
+      /** 列表插件 id：配置后由插件接管列表解析，itemSelector 不再需要 */
+      plugin: z.string().trim().min(1).max(64).optional(),
+      itemSelector: z.string().trim().max(500).optional(),
       /** 字段配置写法：title / url 必填，其余自定义（与保存的规则同构） */
       fields: z.record(z.string(), fieldRuleSchema).optional(),
       linkSelector: z.string().trim().max(500).optional(),
@@ -115,17 +117,28 @@ export const listTestBodySchema = testerBaseSchema.extend({
       /** 列表阶段排除选择器：提取前先删除命中的节点 */
       excludeSelectors: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
     })
-    .strict(),
+    .strict()
+    .superRefine((list, ctx) => {
+      if (!list.plugin && !list.itemSelector) {
+        ctx.addIssue({ code: 'custom', path: ['itemSelector'], message: '未选择列表插件时必须填写 itemSelector' })
+      }
+    }),
   pagination: paginationSchema.optional(),
 })
 
 export const detailTestBodySchema = testerBaseSchema.extend({
-  fields: z.record(z.string(), fieldRuleSchema),
+  /** 详情插件 id：配置后由插件接管详情解析，fields 不再需要 */
+  plugin: z.string().trim().min(1).max(64).optional(),
+  fields: z.record(z.string(), fieldRuleSchema).optional(),
   /** 详情阶段排除选择器：提取前先删除命中的节点 */
   excludeSelectors: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
   clean: z.object({ removeSelectors: z.array(z.string().max(500)).max(50).optional() }).strict().optional(),
   validate: z.object({ minContentLength: z.number().int().min(0).optional() }).strict().optional(),
   parserPlugins: z.array(z.string().trim().min(1).max(64)).max(10).optional(),
+}).superRefine((input, ctx) => {
+  if (!input.plugin && Object.keys(input.fields ?? {}).length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['fields'], message: '未选择详情插件时至少要配置一个字段' })
+  }
 })
 
 export const ruleValidateBodySchema = z
@@ -144,6 +157,19 @@ function resolveProxySetting(proxyId: number | undefined): ProxySettings | null 
 
 function resolveMode(input: { mode?: 'http' | 'browser' }): 'http' | 'browser' {
   return input.mode ?? 'http'
+}
+
+/** 详情插件返回的文章字段 → 字段诊断列表（顺序固定，便于对照）。 */
+const PLUGIN_ARTICLE_KEYS = ['title', 'author', 'articleTime', 'summary', 'content', 'coverUrl'] as const
+
+function summarizePluginArticle(article: ArticleData | null): TesterFieldResultDto[] {
+  if (!article) return []
+  const record = article as unknown as Record<string, unknown>
+  return PLUGIN_ARTICLE_KEYS.flatMap((key) => {
+    const value = record[key]
+    if (value === undefined || value === null || value === '') return []
+    return [{ key, value, matched: 1, required: key === 'title', ok: true }]
+  })
 }
 
 function describeError(error: unknown): string {
@@ -226,7 +252,10 @@ async function withBrowser<T>(
     browser,
     // 解析器插件链与正式采集同一实现（列表与详情阶段都执行）
     parserPluginRunner: runtime.pluginRegistry
-      ? createParserPluginRunner(runtime.pluginRegistry)
+      ? createParserPluginRunner(runtime.pluginRegistry, runtime.request)
+      : undefined,
+    flowPluginRunner: runtime.pluginRegistry
+      ? createFlowPluginRunner(runtime.pluginRegistry, runtime.request)
       : undefined,
   })
   try {
@@ -344,8 +373,8 @@ export async function testAdhocList(
   const config: CrawlRuleConfig = {
     version: 1,
     list: {
-      itemSelector: input.list.itemSelector,
-      ...(input.list.itemSelectorType ? { itemSelectorType: input.list.itemSelectorType } : {}),
+      ...(input.list.plugin ? { plugin: input.list.plugin } : {}),
+      itemSelector: input.list.itemSelector ?? '',
       ...(input.list.fields ? { fields: input.list.fields as Record<string, FieldRule> } : {}),
       ...(input.list.linkSelector ? { linkSelector: input.list.linkSelector } : {}),
       ...(input.list.linkAttribute ? { linkAttribute: input.list.linkAttribute } : {}),
@@ -382,15 +411,18 @@ export async function testAdhocList(
       ok: true,
       url: input.url,
       finalUrl: page.finalUrl,
-      statusCode: page.status,
+      // 插件自己发请求，平台拿不到状态码，用 null 表示「由插件决定」
+      statusCode: page.status > 0 ? page.status : null,
       elapsedMs: page.elapsedMs,
       mode: page.mode,
       itemCount: page.itemCount,
       linkCount: page.links.length,
       duplicateCount: page.duplicateCount,
       links: preview,
-      message:
-        page.itemCount === 0
+      message: input.list.plugin
+        ? `插件 ${input.list.plugin} 返回 ${page.itemCount} 条数据，可用链接 ${page.links.length} 条` +
+          (page.duplicateCount > 0 ? `，丢弃 ${page.duplicateCount} 条重复/非法条目` : '')
+        : page.itemCount === 0
           ? '列表项选择器没有命中任何节点，请检查 itemSelector'
           : `命中 ${page.itemCount} 个列表项，提取 ${page.links.length} 条唯一链接` +
             (page.duplicateCount > 0 ? `，丢弃 ${page.duplicateCount} 条重复/非法链接` : ''),
@@ -422,8 +454,10 @@ export async function testAdhocDetail(
   input: DetailTestRequestBody,
   runtime: TesterRuntime,
 ): Promise<TesterDetailResultDto> {
-  if (Object.keys(input.fields).length === 0) {
-    throw new ValidationError('至少配置一个字段才能测试详情规则', [
+  const usePlugin = Boolean(input.plugin)
+  const fieldRules = (input.fields ?? {}) as Record<string, FieldRule>
+  if (!usePlugin && Object.keys(fieldRules).length === 0) {
+    throw new ValidationError('至少配置一个字段或选择一个详情插件才能测试详情规则', [
       { path: 'fields', message: '字段映射不能为空', code: 'invalid_value' },
     ])
   }
@@ -431,7 +465,7 @@ export async function testAdhocDetail(
   const mode = resolveMode(input)
   const config: CrawlRuleConfig = {
     version: 1,
-    fields: input.fields as Record<string, FieldRule>,
+    ...(usePlugin ? { detail: { plugin: input.plugin } } : { fields: fieldRules }),
     ...(input.clean ? { clean: input.clean } : {}),
     ...(input.validate ? { validate: input.validate } : {}),
     ...(input.parserPlugins && input.parserPlugins.length > 0
@@ -448,21 +482,23 @@ export async function testAdhocDetail(
       engine.parseDetail(context, { url: input.url, sourceUrl: input.url }),
     )
 
-    // 按用户配置的字段顺序输出诊断，而不是对象键序
-    const fields: TesterFieldResultDto[] = Object.keys(input.fields).map((key) => {
-      const extraction = result.fields[key]
-      if (!extraction) {
-        return { key, value: null, matched: 0, required: false, ok: false, error: '字段未被管道处理' }
-      }
-      return {
-        key: extraction.key,
-        value: extraction.value,
-        matched: extraction.matched,
-        required: extraction.required,
-        ok: extraction.ok,
-        ...(extraction.error ? { error: extraction.error } : {}),
-      }
-    })
+    // 按用户配置的字段顺序输出诊断，而不是对象键序；插件路径按插件返回的字段列
+    const fields: TesterFieldResultDto[] = usePlugin
+      ? summarizePluginArticle(result.article)
+      : Object.keys(fieldRules).map((key) => {
+          const extraction = result.fields[key]
+          if (!extraction) {
+            return { key, value: null, matched: 0, required: false, ok: false, error: '字段未被管道处理' }
+          }
+          return {
+            key: extraction.key,
+            value: extraction.value,
+            matched: extraction.matched,
+            required: extraction.required,
+            ok: extraction.ok,
+            ...(extraction.error ? { error: extraction.error } : {}),
+          }
+        })
 
     const missing = result.missing
     const ok = result.errors.length === 0 && missing.length === 0
@@ -479,7 +515,9 @@ export async function testAdhocDetail(
       errors: result.errors,
       article: result.article,
       message: ok
-        ? `提取 ${fields.length} 个字段全部成功`
+        ? usePlugin
+          ? `详情插件 ${input.plugin} 返回 ${fields.length} 个字段`
+          : `提取 ${fields.length} 个字段全部成功`
         : [
             missing.length > 0 ? `缺失必填字段：${missing.join('、')}` : null,
             result.errors.length > 0 ? result.errors.join('；') : null,

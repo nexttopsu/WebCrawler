@@ -155,11 +155,10 @@ async function main() {
   await page.waitForTimeout(900)
   await page.screenshot({ path: join(OUT, '19-logs-error.png'), fullPage: true })
 
-  // 8) 插件扫描弹窗
+  // 8) 插件列表：内置插件应在启动时就已注册，页面不提供扫描入口
   await page.goto(`${ORIGIN}/plugins`, { waitUntil: 'networkidle' })
-  await page.getByRole('button', { name: /扫描插件目录/ }).first().click()
-  await page.waitForTimeout(400)
-  await page.screenshot({ path: join(OUT, '20-plugin-scan.png') })
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: join(OUT, '20-plugins.png'), fullPage: true })
 
   // 9) 窄屏：侧栏应变成抽屉，不能常驻遮挡内容
   const narrowPage = await browser.newPage({ viewport: { width: 900, height: 900 } })

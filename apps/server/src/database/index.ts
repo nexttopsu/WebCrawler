@@ -8,6 +8,6 @@ export * from './models/index.js'
 
 export const DATABASE_PACKAGE = {
   name: 'database',
-  version: '0.6.0',
+  version: '0.7.0',
   description: '数据库层（ORMlet + SQLite）',
 } as const

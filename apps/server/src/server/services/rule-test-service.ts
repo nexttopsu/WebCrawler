@@ -1,7 +1,7 @@
 import type { CategoryRow, CrawlRuleRow, SiteRow } from '../../database/index.js'
 import { CrawlEngine, ParserError } from '../../core/index.js'
 import type { PluginRegistry } from '../../plugin-system/index.js'
-import { createParserPluginRunner } from './task-executor.js'
+import { createFlowPluginRunner, createParserPluginRunner } from './task-executor.js'
 import {
   createBrowserClient,
   RequestError,
@@ -131,7 +131,10 @@ async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promis
     request: runtime.request,
     browser,
     parserPluginRunner: runtime.pluginRegistry
-      ? createParserPluginRunner(runtime.pluginRegistry)
+      ? createParserPluginRunner(runtime.pluginRegistry, runtime.request)
+      : undefined,
+    flowPluginRunner: runtime.pluginRegistry
+      ? createFlowPluginRunner(runtime.pluginRegistry, runtime.request)
       : undefined,
   })
   const startedAt = performance.now()

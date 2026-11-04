@@ -1,130 +1,75 @@
-import type { CrawlServices } from '../core/index.js'
 import {
   PluginRegistryError,
-  isParserPlugin,
-  isSitePlugin,
-  type CrawlerPlugin,
-  type PluginManifest,
-  type ParserPlugin,
-  type SitePlugin,
+  type PluginSlot,
+  type RegisteredPlugin,
 } from './types.js'
 
 /**
  * 内存中的插件注册表。
  *
- * 管理两类信息：
- * - 清单（manifest）：用于展示与落库；
- * - 运行时实例（plugin）：用于真正执行采集。
- *
- * 注册表不负责加载代码，也不碰数据库；加载器与持久化在后续阶段接入。
+ * 插件全部内置：进程启动时由 `registerBuiltinPlugins` 一次性写入，
+ * 运行期间只会有启停带来的增删，不会重新读取文件。
  */
 export class PluginRegistry {
-  private readonly manifests = new Map<string, PluginManifest>()
-  private readonly instances = new Map<string, CrawlerPlugin>()
+  private readonly plugins = new Map<string, RegisteredPlugin>()
 
-  /** 注册插件清单；同名已存在时抛错，避免静默覆盖。 */
-  register(manifest: PluginManifest): void {
-    const name = manifest.name.trim()
-    if (!name) {
-      throw new PluginRegistryError('插件名不能为空')
-    }
-    if (this.manifests.has(name)) {
-      throw new PluginRegistryError(`插件 "${name}" 已注册`)
-    }
-    this.manifests.set(name, { ...manifest, name })
+  /** 注册插件；同 id 已存在时抛错，避免静默覆盖。 */
+  register(plugin: RegisteredPlugin): void {
+    const id = plugin.config.id.trim()
+    if (!id) throw new PluginRegistryError('插件 id 不能为空')
+    if (this.plugins.has(id)) throw new PluginRegistryError(`插件 "${id}" 已注册`)
+    this.plugins.set(id, { ...plugin, config: { ...plugin.config, id } })
   }
 
-  /** 注销清单，返回是否确实移除了记录。 */
-  unregister(name: string): boolean {
-    return this.manifests.delete(name)
+  /** 覆盖同 id 插件（测试或替换实现时用）。 */
+  replace(plugin: RegisteredPlugin): void {
+    const id = plugin.config.id.trim()
+    if (!id) throw new PluginRegistryError('插件 id 不能为空')
+    this.plugins.set(id, { ...plugin, config: { ...plugin.config, id } })
   }
 
-  /** 按名称取清单。 */
-  get(name: string): PluginManifest | undefined {
-    return this.manifests.get(name)
+  /** 按 id 注销，返回是否确实移除了记录。 */
+  unregister(id: string): boolean {
+    return this.plugins.delete(id)
   }
 
-  /** 全部清单，按名称排序，保证输出稳定。 */
-  list(): PluginManifest[] {
-    return [...this.manifests.values()].sort((a, b) => a.name.localeCompare(b.name))
+  /** 按 id 取插件。 */
+  get(id: string): RegisteredPlugin | undefined {
+    return this.plugins.get(id)
+  }
+
+  /** 全部插件，按 id 排序，保证输出稳定。 */
+  list(): RegisteredPlugin[] {
+    return [...this.plugins.values()].sort((a, b) => a.config.id.localeCompare(b.config.id))
+  }
+
+  /** 取解析器插件；阶段不符（没导出对应函数）时返回 undefined。 */
+  getParser(id: string, slot: PluginSlot): RegisteredPlugin | undefined {
+    const plugin = this.plugins.get(id)
+    if (!plugin || plugin.config.type !== 'parser') return undefined
+    return slot === 'list' ? (plugin.parseList ? plugin : undefined) : plugin.parseDetail ? plugin : undefined
+  }
+
+  /**
+   * 取全流程插件。
+   *
+   * `slot` 用来校验能力：插件没导出 `getList` 就不能挂列表，
+   * 没导出 `getDetail` 就不能挂详情。返回 undefined 时调用方给出明确错误。
+   */
+  getFlow(id: string, slot: PluginSlot): RegisteredPlugin | undefined {
+    const plugin = this.plugins.get(id)
+    if (!plugin || plugin.config.type !== 'flow') return undefined
+    return slot === 'list' ? (plugin.getList ? plugin : undefined) : plugin.getDetail ? plugin : undefined
+  }
+
+  /** 清空注册表（进程重启或测试复位时用）。 */
+  clear(): void {
+    this.plugins.clear()
   }
 
   /** 已登记数量。 */
   get size(): number {
-    return this.manifests.size
-  }
-
-  /** 注册运行时实例，同时补齐清单。 */
-  registerPlugin(plugin: CrawlerPlugin): void {
-    const name = plugin.name.trim()
-    if (!name) throw new PluginRegistryError('插件名不能为空')
-    if (this.instances.has(name)) throw new PluginRegistryError(`插件实例 "${name}" 已注册`)
-
-    this.instances.set(name, plugin)
-    if (!this.manifests.has(name)) {
-      this.manifests.set(name, {
-        name,
-        version: plugin.version,
-        type: plugin.type,
-        ...(isSitePlugin(plugin) ? { description: '站点插件' } : {}),
-      })
-    }
-  }
-
-  /** 注销运行时实例。 */
-  unregisterPlugin(name: string): boolean {
-    return this.instances.delete(name)
-  }
-
-  /** 按名称取运行时实例。 */
-  getPlugin(name: string): CrawlerPlugin | undefined {
-    return this.instances.get(name)
-  }
-
-  /** 取站点插件；不是站点插件时返回 undefined。 */
-  getSitePlugin(name: string): SitePlugin | undefined {
-    const plugin = this.instances.get(name)
-    return plugin && isSitePlugin(plugin) ? plugin : undefined
-  }
-
-  /** 取解析器插件；不是解析器插件时返回 undefined。 */
-  getParserPlugin(name: string): ParserPlugin | undefined {
-    const plugin = this.instances.get(name)
-    return plugin && isParserPlugin(plugin) ? plugin : undefined
-  }
-
-  /** 全部运行时实例，按名称排序。 */
-  listPlugins(): CrawlerPlugin[] {
-    return [...this.instances.values()].sort((a, b) => a.name.localeCompare(b.name))
-  }
-
-  /** 按 URL 找出第一个负责它的站点插件。 */
-  findSitePlugin(url: string): SitePlugin | undefined {
-    return this.listPlugins().filter(isSitePlugin).find((plugin) => plugin.match(url))
-  }
-
-  /** 依次初始化插件；单个失败不影响其它插件，返回失败列表。 */
-  async initializeAll(services: CrawlServices): Promise<{ name: string; error: Error }[]> {
-    const failures: { name: string; error: Error }[] = []
-    for (const plugin of this.listPlugins()) {
-      try {
-        await plugin.initialize(services)
-      } catch (error) {
-        failures.push({ name: plugin.name, error: error instanceof Error ? error : new Error(String(error)) })
-      }
-    }
-    return failures
-  }
-
-  /** 依次释放插件；逐个隔离异常。 */
-  async destroyAll(): Promise<void> {
-    for (const plugin of this.listPlugins()) {
-      try {
-        await plugin.destroy()
-      } catch {
-        // 销毁失败不影响其它插件释放
-      }
-    }
+    return this.plugins.size
   }
 }
 
@@ -135,9 +80,20 @@ export function createPluginRegistry(): PluginRegistry {
 
 export const PLUGINS_PACKAGE = {
   name: 'plugin-system',
-  version: '0.6.0',
-  description: '插件系统：契约、注册表与通用站点插件',
+  version: '0.7.0',
+  description: '插件系统：内置插件契约、类型 SDK 与注册表',
 } as const
 
 export * from './types.js'
-export * from './generic-site-plugin.js'
+export { definePlugin, validatePluginModule } from './sdk.js'
+export type {
+  FlowDetailOnlyModule,
+  FlowListOnlyModule,
+  FlowPluginConfig,
+  FlowPluginModule,
+  ParserDetailOnlyModule,
+  ParserListOnlyModule,
+  ParserPluginConfig,
+  ParserPluginModule,
+  PluginRuntime,
+} from './sdk.js'

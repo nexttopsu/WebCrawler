@@ -3,9 +3,8 @@ import { computed, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Pencil, Plus, RefreshCw, Trash2, Zap } from '@lucide/vue'
-import type { PluginDto, ProxyDto, RuleDto, SiteConnectionTestDto, SiteDto } from '@webcrawler/shared'
+import type { ProxyDto, RuleDto, SiteConnectionTestDto, SiteDto } from '@webcrawler/shared'
 import { createSite, deleteSite, getSite, listSites, patchSite, setSiteStatus, testSite } from '@/api/sites'
-import { listPlugins } from '@/api/plugins'
 import { listProxies } from '@/api/proxies'
 import { listRules } from '@/api/rules'
 import { ApiClientError, errorMessage } from '@/api/client'
@@ -37,8 +36,6 @@ const submitting = ref(false)
 const formRef = ref<FormInstance>()
 const proxyOptions = ref<ProxyDto[]>([])
 const ruleOptions = ref<RuleDto[]>([])
-/** 全流程插件（source 类型且已启用）：选中后由插件处理请求与数据获取，无需配置规则 */
-const sourcePluginOptions = ref<PluginDto[]>([])
 
 const form = reactive({
   name: '',
@@ -47,7 +44,6 @@ const form = reactive({
   status: 'active' as 'active' | 'inactive',
   defaultProxyId: null as number | null,
   defaultRuleId: null as number | null,
-  pluginName: null as string | null,
 })
 
 /** 域名不再手填：实时从站点地址的主机名推导，保存时服务端会再算一次。 */
@@ -75,14 +71,12 @@ const dialogTitle = computed(() => (editingId.value ? `编辑网站 #${editingId
 
 async function loadOptions(siteId?: number): Promise<void> {
   try {
-    const [proxies, rulesPage, pluginsPage] = await Promise.all([
+    const [proxies, rulesPage] = await Promise.all([
       listProxies({ pageSize: 100 }),
       siteId ? listRules({ siteId, pageSize: 100, scope: 'site' }) : Promise.resolve(null),
-      listPlugins({ type: 'source', enabled: 'true', pageSize: 100 }).catch(() => null),
     ])
     proxyOptions.value = proxies.items
     ruleOptions.value = rulesPage?.items ?? []
-    sourcePluginOptions.value = pluginsPage?.items ?? []
   } catch {
     // 选项加载失败不阻塞主表单，用户仍可只填必填项
     proxyOptions.value = []
@@ -98,7 +92,6 @@ async function openCreate(): Promise<void> {
     status: 'active',
     defaultProxyId: null,
     defaultRuleId: null,
-    pluginName: null,
   })
   ruleOptions.value = []
   await loadOptions()
@@ -114,7 +107,6 @@ async function openEdit(row: SiteDto): Promise<void> {
     status: row.status,
     defaultProxyId: row.defaultProxyId,
     defaultRuleId: null,
-    pluginName: row.pluginName,
   })
   dialogVisible.value = true
   await loadOptions(row.id)
@@ -140,7 +132,6 @@ async function submit(): Promise<void> {
       description: form.description.trim() || null,
       status: form.status,
       defaultProxyId: form.defaultProxyId,
-      pluginName: form.pluginName,
     }
     if (editingId.value) {
       await patchSite(editingId.value, { ...payload, defaultRuleId: form.defaultRuleId })
@@ -289,12 +280,6 @@ function goCategories(row: SiteDto): void {
         </template>
       </el-table-column>
 
-      <el-table-column label="插件" width="120">
-        <template #default="{ row }">
-          <span class="wb-muted">{{ row.pluginName ?? '默认' }}</span>
-        </template>
-      </el-table-column>
-
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
           <StatusTag :status="row.status" />
@@ -361,25 +346,6 @@ function goCategories(row: SiteDto): void {
               :value="proxy.id"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item label="全流程插件">
-          <el-select
-            v-model="form.pluginName"
-            clearable
-            filterable
-            placeholder="默认流程（按规则采集）"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="plugin in sourcePluginOptions"
-              :key="plugin.name"
-              :label="`${plugin.name} ${plugin.version}`"
-              :value="plugin.name"
-            />
-          </el-select>
-          <p class="form-hint">
-            选择全流程插件后，采集由插件处理请求与数据获取，无需再配置规则；留空走默认流程。
-          </p>
         </el-form-item>
         <el-form-item label="默认规则">
           <el-select

@@ -94,6 +94,47 @@ describe('测试器草稿', () => {
     expect(loadTesterDraft()).toBeNull()
   })
 
+  it('旧草稿缺少插件字段时补成空串（否则视图里 .trim() 会抛错白屏）', () => {
+    // 这是历史草稿的真实形状：没有 plugin / detailPlugin / 分页参数
+    localStorage.setItem(
+      'webcrawler.tester-draft',
+      JSON.stringify({
+        version: 1,
+        savedAt: new Date().toISOString(),
+        url: 'https://example.com/news',
+        mode: 'http',
+        proxyId: null,
+        list: { itemSelector: '.news-item' },
+        fields: [],
+        parserPlugins: [],
+        excludeSelectors: [],
+      }),
+    )
+
+    const restored = loadTesterDraft()
+    expect(restored?.list.plugin).toBe('')
+    expect(restored?.detailPlugin).toBe('')
+    expect(restored?.list.paginationType).toBe('none')
+    expect(restored?.list.paginationParameter).toBe('page')
+    expect(typeof restored?.list.itemSelector).toBe('string')
+  })
+
+  it('插件字段被清空（null）时按空串处理', () => {
+    // Element Plus 的单选清空给的是 undefined，落盘成 JSON 时字段会直接消失
+    localStorage.setItem(
+      'webcrawler.tester-draft',
+      JSON.stringify({
+        ...createEmptyDraft(),
+        list: { ...createEmptyDraft().list, plugin: null },
+        detailPlugin: null,
+      }),
+    )
+
+    const restored = loadTesterDraft()
+    expect(restored?.list.plugin).toBe('')
+    expect(restored?.detailPlugin).toBe('')
+  })
+
   it('草稿不包含任何代理凭据字段', () => {
     const draft = createEmptyDraft()
     draft.proxyId = 3

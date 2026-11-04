@@ -7,6 +7,7 @@
 import { getDatabaseContext, getModels } from '../../database/index.js'
 import { CrawlTaskStatus } from '../../shared/index.js'
 import type { ProxyOverviewDto, StatsOverviewDto, StatsTrendPoint } from '../../shared/index.js'
+import { builtinPluginCount } from './plugin-service.js'
 import { listLogs } from './log-service.js'
 import { listTasks } from './task-service.js'
 
@@ -125,7 +126,8 @@ export function buildOverview(days = 14): StatsOverviewDto {
       articles: getModels().article.count(),
       tasks: getModels().crawlTask.count(),
       proxies: getModels().proxy.count(),
-      plugins: getModels().plugin.count(),
+      // 插件是内置的，数量与数据库无关；表里只有开关，不代表总数
+      plugins: builtinPluginCount(),
     },
     today: {
       articles: scalar(

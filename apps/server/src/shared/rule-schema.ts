@@ -116,7 +116,6 @@ export const fieldRuleSchema: z.ZodType<FieldRule, unknown> = z.lazy(() =>
     .object({
       type: z.enum(['text', 'html', 'attr', 'list', 'object']),
       selector: selectorSchema.optional(),
-      selectorType: z.enum(['css', 'xpath']).optional(),
       attribute: z
         .string()
         .trim()
@@ -147,13 +146,6 @@ export const fieldRuleSchema: z.ZodType<FieldRule, unknown> = z.lazy(() =>
       }
       if ((rule.type === 'text' || rule.type === 'html') && rule.fields) {
         ctx.addIssue({ code: 'custom', path: ['fields'], message: `type=${rule.type} 不支持嵌套 fields` })
-      }
-      if (rule.jsonPath && rule.selectorType) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['selectorType'],
-          message: '使用 jsonPath 时不能同时指定 selectorType',
-        })
       }
     }),
 )
@@ -248,12 +240,19 @@ const parserPluginNameSchema = z
   .trim()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, '解析器插件名不合法')
 
+/** 全流程插件 id（config.id），与插件命名规则一致。 */
+const flowPluginIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/, '插件 id 不合法')
+
 /** 列表页规则。 */
 export const listRuleSchema = z
   .object({
+    /** 全流程插件 id：配置后由插件接管列表解析，itemSelector 可省略 */
+    plugin: flowPluginIdSchema.optional(),
     url: urlSchema('列表页地址').optional(),
-    itemSelector: selectorSchema,
-    itemSelectorType: z.enum(['css', 'xpath']).optional(),
+    itemSelector: selectorSchema.optional(),
     fields: createFieldsMapSchema().optional(),
     linkSelector: selectorSchema.optional(),
     titleSelector: selectorSchema.optional(),
@@ -276,6 +275,20 @@ export const listRuleSchema = z
   })
   .strict()
   .superRefine((rule, ctx) => {
+    if (!rule.plugin && !rule.itemSelector) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['itemSelector'],
+        message: '未配置列表插件时必须提供 itemSelector',
+      })
+    }
+    if (rule.plugin && (rule.linkSelector || rule.titleSelector)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['plugin'],
+        message: '列表插件与 linkSelector / titleSelector 不能同时使用',
+      })
+    }
     if (!rule.fields) return
     for (const key of REQUIRED_LIST_FIELDS) {
       if (!(key in rule.fields)) {
@@ -291,16 +304,27 @@ export const listRuleSchema = z
 /** 详情页规则。 */
 export const detailRuleSchema = z
   .object({
+    /** 全流程插件 id：配置后由插件抓取并解析详情页，fields 不再需要 */
+    plugin: flowPluginIdSchema.optional(),
     method: z.enum(['GET', 'POST']).optional(),
     fields: fieldsMapSchema.optional(),
   })
   .strict()
+  .superRefine((rule, ctx) => {
+    if (rule.plugin && rule.fields) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['fields'],
+        message: '详情插件与字段映射不能同时配置，二选一',
+      })
+    }
+  })
 
 /** 请求级代理设置。`null` 表示显式直连，覆盖上层的代理配置。 */
 export const proxySettingsSchema = z
   .object({
-    protocol: z.enum(['http', 'https', 'socks5'], {
-      message: '代理协议仅支持 http / https / socks5',
+    protocol: z.enum(['http', 'https'], {
+      message: '代理协议仅支持 http / https',
     }),
     host: z.string().trim().min(1).max(253),
     port: z.number().int().min(1).max(65_535),

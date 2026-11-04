@@ -527,11 +527,15 @@ void loadSites()
       <el-table-column label="列表配置" min-width="200">
         <template #default="{ row }">
           <div class="list-config-cell">
-            <code class="wb-mono selectors">{{ row.config?.list?.itemSelector ?? '—' }}</code>
+            <code class="wb-mono selectors">
+              {{ row.config?.list?.itemSelector ?? (row.config?.list?.plugin ? `插件 ${row.config.list.plugin}` : '—') }}
+            </code>
             <span class="wb-muted cell-sub">
-              <template v-if="listFieldCount(row) > 0">{{ listFieldCount(row) }} 个列表字段</template>
+              <template v-if="row.config?.list?.plugin">全流程插件</template>
+              <template v-else-if="listFieldCount(row) > 0">{{ listFieldCount(row) }} 个列表字段</template>
               <template v-else>旧版选择器写法</template>
               <template v-if="parserPluginCount(row)"> · 解析器插件 {{ parserPluginCount(row) }}</template>
+              <template v-if="row.config?.detail?.plugin"> · 详情插件</template>
             </span>
           </div>
         </template>

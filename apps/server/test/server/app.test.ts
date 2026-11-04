@@ -53,7 +53,7 @@ describe('GET /api/system/info', () => {
     expect(body.success).toBe(true)
     expect(body.data.name).toBe('WebCrawler')
     expect(body.data.runtime.node).toBe(process.version)
-    expect(body.data.database.schemaVersion).toBe(5)
+    expect(body.data.database.schemaVersion).toBe(7)
     expect(body.data.database.models).toHaveLength(12)
     expect(body.data.packages.map((item: { name: string }) => item.name)).toEqual([
       'shared',
@@ -62,7 +62,14 @@ describe('GET /api/system/info', () => {
       'core',
       'plugin-system',
     ])
-    expect(body.data.plugins.registered).toBe(0)
+    // 插件内置，启动时全部注册
+    expect(body.data.plugins.registered).toBe(3)
+    expect(body.data.plugins.items.map((item: { id: string }) => item.id)).toEqual([
+      'demo-fixture',
+      'example-flow-news',
+      'example-parser-clean',
+    ])
+    expect(body.data.plugins.items[0].source).toBe('src/plugins/demo-fixture.ts')
     expect(body.data.verbose).toBeUndefined()
   })
 

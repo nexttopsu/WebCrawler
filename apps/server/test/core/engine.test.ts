@@ -11,8 +11,8 @@ import {
   type RequestClient,
 } from '../../src/request/index.js'
 import { CrawlEngine } from '../../src/core/index.js'
-import type { PluginRegistry } from '../../src/plugin-system/index.js'
-import { createParserPluginRunner } from '../../src/server/services/task-executor.js'
+import type { PluginContext, PluginRegistry, PluginSlot } from '../../src/plugin-system/index.js'
+import { createFlowPluginRunner, createParserPluginRunner } from '../../src/server/services/task-executor.js'
 
 const listHtml = readFileSync(new URL('./fixtures/list.html', import.meta.url), 'utf8')
 const detailHtml = readFileSync(new URL('./fixtures/detail.html', import.meta.url), 'utf8')
@@ -127,22 +127,6 @@ describe('采集引擎：列表提取', () => {
     await expect(engine.listLinks(context)).rejects.toThrow('list.itemSelector')
   })
 
-  it('支持 XPath 列表规则', async () => {
-    const context = makeContext(
-      makeRule({
-        list: {
-          itemSelector: '//div[@class="news-item"]',
-          itemSelectorType: 'xpath',
-          linkSelector: './/a[@class="title"]',
-          titleSelector: './/a[@class="title"]',
-        },
-      }),
-    )
-    const links = await engine.listLinks(context)
-    expect(links).toHaveLength(3)
-    expect(links[2]?.title).toBe('第三篇报道')
-  })
-
   it('配置 coverSelector 时从列表项提取封面图', async () => {
     const context = makeContext(
       makeRule({
@@ -168,21 +152,24 @@ describe('采集引擎：列表提取', () => {
 
   it('列表阶段只执行 list.parserPlugins，详情阶段只执行顶层 parserPlugins', async () => {
     const calls: Array<{ name: string; stage: string }> = []
-    // 最小注册表桩：任何名字都返回一个会记录调用的解析器插件
+    // 最小注册表桩：任何名字都返回一个会记录调用的解析器插件（两个阶段都实现）
+    const transform = (stage: 'list' | 'detail') => async (_url: string, fields: Record<string, unknown>) => {
+      calls.push({ name: stage === 'list' ? 'list-decrypt' : 'detail-decrypt', stage })
+      return { ...fields, title: `[${stage}] ${String(fields.title ?? '')}` }
+    }
     const registry = {
-      getParserPlugin: (name: string) => ({
-        name,
-        type: 'parser',
-        transform: async (input: { data: Record<string, unknown>; stage: string }) => {
-          calls.push({ name, stage: input.stage })
-          return { ...input.data, title: `[${input.stage}] ${String(input.data.title ?? '')}` }
-        },
+      getParser: (id: string) => ({
+        config: { id, name: id, type: 'parser' },
+        source: `src/plugins/${id}.ts`,
+        parseList: transform('list'),
+        parseDetail: transform('detail'),
       }),
+      get: (id: string) => ({ config: { id, name: id, type: 'parser' }, source: `src/plugins/${id}.ts` }),
     } as unknown as PluginRegistry
     const pluginEngine = new CrawlEngine({
       request,
       browser,
-      parserPluginRunner: createParserPluginRunner(registry),
+      parserPluginRunner: createParserPluginRunner(registry, request),
     })
 
     const context = makeContext(
@@ -365,5 +352,155 @@ describe('采集引擎：浏览器模式', () => {
     const error = await httpOnlyEngine.parseDetail(context, { url: `${origin}/spa`, sourceUrl: origin })
       .catch((e: unknown) => e)
     expect(error).toMatchObject({ code: RequestErrorCode.UNSUPPORTED })
+  })
+})
+
+describe('采集引擎：全流程插件', () => {
+  /** 造一个全流程插件注册表桩；`functions` 控制导出哪几个函数。 */
+  function flowRegistry(functions: { list?: unknown; detail?: unknown }): PluginRegistry {
+    return {
+      getFlow: (id: string, slot: PluginSlot) => ({
+        config: { id, name: id, type: 'flow' },
+        source: `src/plugins/${id}.ts`,
+        ...(functions.list === undefined ? {} : { getList: functions.list }),
+        ...(functions.detail === undefined ? {} : { getDetail: functions.detail }),
+        // 阶段不匹配时由运行器报错，这里保证只返回实现了该阶段的插件
+        ...(slot === 'list' && functions.list === undefined ? { getList: undefined } : {}),
+      }),
+      get: (id: string) => ({ config: { id, name: id, type: 'flow' }, source: `src/plugins/${id}.ts` }),
+    } as unknown as PluginRegistry
+  }
+
+  function pluginEngine(registry: PluginRegistry): CrawlEngine {
+    return new CrawlEngine({ request, browser, flowPluginRunner: createFlowPluginRunner(registry, request) })
+  }
+
+  it('ctx.fetchPage 在 browser 模式下返回执行过 JS 的页面', async () => {
+    const registry = flowRegistry({
+      list: async (_url: string, ctx: PluginContext) => {
+        // /spa 的正文由内联脚本写入，HTTP 抓到的只是空壳
+        const page = await ctx.fetchPage(`${origin}/spa`)
+        const rendered = page.html.includes('脚本渲染的标题')
+        return [{ url: `${origin}/news/1.html`, title: rendered ? '渲染成功' : '未渲染', extra: { status: page.status } }]
+      },
+    })
+    const context = makeContext(makeRule({ list: { plugin: 'demo-flow' } }))
+    context.requestOptions = { mode: 'browser' }
+
+    const page = await pluginEngine(registry).listPage(context)
+    expect(page.links[0]?.title).toBe('渲染成功')
+    expect(page.links[0]?.metadata).toEqual({ status: 200 })
+  })
+
+  it('列表阶段由 getList 返回条目，引擎负责补绝对地址、去重与字段映射', async () => {
+    const registry = flowRegistry({
+      list: async () => [
+        { url: '/news/1.html', title: ' 一篇 ', author: '张三', articleTime: '2026-01-01', coverUrl: '/cover.jpg' },
+        { url: '/news/1.html' },
+        { url: 'javascript:void(0)' },
+        { title: '没有地址' },
+        { url: '/news/2.html', extra: { source: 'plugin' } },
+      ],
+      detail: async () => ({ title: 'x' }),
+    })
+    const context = makeContext(makeRule({ list: { plugin: 'demo-flow' } }))
+    const page = await pluginEngine(registry).listPage(context)
+
+    expect(page.links.map((link) => link.url)).toEqual([`${origin}/news/1.html`, `${origin}/news/2.html`])
+    expect(page.links[0]).toMatchObject({
+      title: '一篇',
+      author: '张三',
+      articleTime: '2026-01-01',
+      coverUrl: `${origin}/cover.jpg`,
+      sourceUrl: `${origin}/list`,
+    })
+    expect(page.links[1]?.metadata).toEqual({ source: 'plugin' })
+    // 重复 / 伪协议 / 缺地址各算一次
+    expect(page.duplicateCount).toBe(3)
+    expect(page.itemCount).toBe(5)
+    // 插件自己发请求，状态码由插件决定
+    expect(page.status).toBe(0)
+  })
+
+  it('getList 返回非数组时明确报错', async () => {
+    const registry = flowRegistry({ list: async () => ({ list: [] }), detail: async () => ({}) })
+    const error = await pluginEngine(registry)
+      .listPage(makeContext(makeRule({ list: { plugin: 'demo-flow' } })))
+      .catch((e: unknown) => e)
+
+    expect(error).toMatchObject({ code: 'INVALID_FIELD_RULE' })
+    expect((error as Error).message).toContain('必须返回数组')
+  })
+
+  it('插件没导出 getList 时报错并说明它的实际能力', async () => {
+    const registry = flowRegistry({ detail: async () => ({ title: 'x' }) })
+    const error = await pluginEngine(registry)
+      .listPage(makeContext(makeRule({ list: { plugin: 'demo-flow' } })))
+      .catch((e: unknown) => e)
+
+    expect((error as Error).message).toContain('getList')
+  })
+
+  it('运行环境没有插件运行器时报错，不静默走默认流程', async () => {
+    const error = await engine
+      .listPage(makeContext(makeRule({ list: { plugin: 'demo-flow' } })))
+      .catch((e: unknown) => e)
+
+    expect((error as Error).message).toContain('没有加载插件')
+  })
+
+  it('详情阶段由 getDetail 返回文章，url 始终取列表链接', async () => {
+    const registry = flowRegistry({
+      detail: async () => ({
+        url: '/news/999.html',
+        title: '插件给的标题',
+        author: '李四',
+        articleTime: '2026-02-02',
+        content: '<p>正文</p>',
+        coverUrl: '/cover-2.jpg',
+        extra: { tag: 'x' },
+      }),
+    })
+    const context = makeContext(makeRule({ detail: { plugin: 'demo-flow' } }))
+    const result = await pluginEngine(registry).parseDetail(context, {
+      url: `${origin}/news/1.html`,
+      sourceUrl: context.url,
+    })
+
+    expect(result.article).toMatchObject({
+      title: '插件给的标题',
+      author: '李四',
+      articleTime: '2026-02-02',
+      content: '<p>正文</p>',
+      coverUrl: `${origin}/cover-2.jpg`,
+      // 插件返回的规范地址不覆盖列表链接，否则同 URL 去重会失效
+      url: `${origin}/news/1.html`,
+    })
+    expect(result.article?.metadata).toMatchObject({ sourceUrl: `${origin}/list`, tag: 'x' })
+  })
+
+  it('详情插件没返回标题时该篇按失败处理（article 为空）', async () => {
+    const registry = flowRegistry({ detail: async () => ({ author: '李四' }) })
+    const context = makeContext(makeRule({ detail: { plugin: 'demo-flow' } }))
+    const result = await pluginEngine(registry).parseDetail(context, {
+      url: `${origin}/news/1.html`,
+      sourceUrl: context.url,
+    })
+
+    expect(result.article).toBeNull()
+    expect(result.errors).toEqual(['缺少标题'])
+  })
+
+  it('crawlCategory 走插件后能拿到链接与文章', async () => {
+    const registry = flowRegistry({
+      list: async () => [{ url: `${origin}/news/1.html`, title: '列表标题' }, { url: `${origin}/news/3.html` }],
+      detail: async (url: string) => ({ title: `详情 ${url.split('/').pop()}`, content: '<p>正文</p>' }),
+    })
+    const context = makeContext(makeRule({ list: { plugin: 'demo-flow' }, detail: { plugin: 'demo-flow' } }))
+    const result = await pluginEngine(registry).crawlCategory(context)
+
+    expect(result.stats.linkCount).toBe(2)
+    expect(result.articles.map((article) => article.title)).toEqual(['详情 1.html', '详情 3.html'])
+    expect(result.errors).toEqual([])
   })
 })

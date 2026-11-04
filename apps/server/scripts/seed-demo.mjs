@@ -170,50 +170,14 @@ async function extras() {
     }
   }
 
-  // 插件目录：写一个合法清单与一个不兼容清单，验证扫描的「成功 + 逐条报错」
-  const { mkdir, writeFile } = await import('node:fs/promises')
-  const { join } = await import('node:path')
-  const dir = process.env.PLUGIN_DIR ?? join(ROOT, 'tmp', 'plugins')
-  await mkdir(join(dir, 'demo-exporter'), { recursive: true })
-  await writeFile(
-    join(dir, 'demo-exporter', 'plugin.json'),
+  // 插件全部内置：确认服务启动时已经把内置插件注册上（不需要扫描、不需要写文件）
+  const plugins = await call('GET', '/plugins')
+  console.log(
+    'plugins',
     JSON.stringify(
-      {
-        name: 'demo-exporter',
-        version: '1.2.0',
-        type: 'exporter',
-        entry: './index.js',
-        description: '演示用导出器插件',
-        coreVersion: '^0.6.0',
-        config: { apiKey: 'should-be-redacted', endpoint: 'https://example.com/hook' },
-      },
-      null,
-      2,
+      plugins.items.map((item) => ({ id: item.pluginId, type: item.type, slots: item.slots, status: item.status })),
     ),
-    'utf8',
   )
-  await mkdir(join(dir, 'future-source'), { recursive: true })
-  await writeFile(
-    join(dir, 'future-source', 'plugin.json'),
-    JSON.stringify(
-      {
-        name: 'future-source',
-        version: '2.0.0',
-        type: 'source',
-        entry: './index.js',
-        description: '核心版本要求过高，应被标记为不兼容',
-        coreVersion: '^9.0.0',
-      },
-      null,
-      2,
-    ),
-    'utf8',
-  )
-  await mkdir(join(dir, 'broken-manifest'), { recursive: true })
-  await writeFile(join(dir, 'broken-manifest', 'plugin.json'), '{ this is not json', 'utf8')
-
-  const scan = await call('POST', '/plugins/scan', { directory: dir })
-  console.log('scan', JSON.stringify({ added: scan.added, failed: scan.failed.length }))
 
   console.log('DONE')
 }

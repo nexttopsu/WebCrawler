@@ -58,8 +58,8 @@ export const migration001InitialIndexes: Migration = {
       CREATE UNIQUE INDEX IF NOT EXISTS ux_proxy_endpoint ON proxy (protocol, host, port);
       CREATE INDEX IF NOT EXISTS ix_proxy_status ON proxy (status);
 
-      -- 插件：名称唯一
-      CREATE UNIQUE INDEX IF NOT EXISTS ux_plugin_name ON plugin (name);
+      -- 插件：稳定 id 唯一（表结构见 007：插件内置，只保留开关）
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_plugin_plugin_id ON plugin (pluginId);
 
       -- 采集错误：按任务与时间排查
       CREATE INDEX IF NOT EXISTS ix_crawl_error_task ON crawl_error (taskId);

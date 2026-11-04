@@ -1,10 +1,10 @@
 /**
  * 统一解析入口。
  *
- * 对外只暴露这一个 Parser：CSS / XPath / JSON 三种能力都从这里进入，
+ * 对外只暴露这一个 Parser：CSS / JSON 两种能力都从这里进入，
  * 规则测试器与正式采集必须共用它，禁止各自实现一套提取逻辑。
  */
-import type { FieldCleanRule, FieldRule, SelectorType, ValidateConfig } from '../../shared/index.js'
+import type { FieldCleanRule, FieldRule, ValidateConfig } from '../../shared/index.js'
 import { cleanHtml, cleanText, extractImages, htmlToText, type CleanHtmlOptions } from '../clean.js'
 import { ParserError, ParserErrorCode } from '../errors.js'
 import { getJsonPath } from '../json-path.js'
@@ -20,8 +20,6 @@ import {
 
 /** 单值 / 多值提取选项。 */
 export interface ExtractOptions {
-  /** 选择器类型，默认 css */
-  selectorType?: SelectorType
   /** 是否取全部匹配 */
   multiple?: boolean
   /** 取值后的清洗规则 */
@@ -48,9 +46,8 @@ export class Parser {
   }
 
   /** 统计选择器匹配数量。 */
-  count(html: string | HtmlDocument, selector: string, selectorType: SelectorType = 'css'): number {
-    const doc = this.toDocument(html)
-    return doc.count(selector, selectorType)
+  count(html: string | HtmlDocument, selector: string): number {
+    return this.toDocument(html).count(selector)
   }
 
   /** 提取文本。 */
@@ -79,7 +76,7 @@ export class Parser {
     options: ExtractOptions = {},
   ): string | string[] {
     const doc = this.toDocument(html)
-    const nodes = doc.selectAll(selector, options.selectorType ?? 'css')
+    const nodes = doc.selectAll(selector)
     const values = nodes
       .map((node) => cleanText(node.attr(attribute) ?? '', options.clean ?? {}))
       .filter((value) => value !== '')
@@ -91,25 +88,22 @@ export class Parser {
     html: string | HtmlDocument,
     itemSelector: string,
     fields: Record<string, FieldRule>,
-    options: { selectorType?: SelectorType } = {},
   ): Record<string, unknown>[] {
     validateFieldRules(fields)
     const doc = this.toDocument(html)
-    return doc
-      .selectAll(itemSelector, options.selectorType ?? 'css')
-      .map((node) => extractFields(node, fields).data)
+    return doc.selectAll(itemSelector).map((node) => extractFields(node, fields).data)
   }
 
   /** 提取嵌套对象。 */
   extractObject(
     html: string | HtmlDocument,
     fields: Record<string, FieldRule>,
-    options: { selector?: string; selectorType?: SelectorType } = {},
+    options: { selector?: string } = {},
   ): Record<string, unknown> {
     validateFieldRules(fields)
     const doc = this.toDocument(html)
     if (!options.selector) return extractFields(doc, fields).data
-    const node = doc.selectFirst(options.selector, options.selectorType ?? 'css')
+    const node = doc.selectFirst(options.selector)
     return node ? extractFields(node, fields).data : {}
   }
 
@@ -170,8 +164,8 @@ export class Parser {
   }
 
   /** 在节点作用域内查询，供插件复用。 */
-  selectWithin(scope: HtmlDocument | MatchedNode, expr: string, type: SelectorType = 'css'): MatchedNode[] {
-    return selectWithin(scope, expr, type)
+  selectWithin(scope: HtmlDocument | MatchedNode, expr: string): MatchedNode[] {
+    return selectWithin(scope, expr)
   }
 
   private toDocument(html: string | HtmlDocument): HtmlDocument {
@@ -185,7 +179,7 @@ export class Parser {
     options: ExtractOptions,
   ): string | string[] {
     const doc = this.toDocument(html)
-    const nodes = doc.selectAll(selector, options.selectorType ?? 'css')
+    const nodes = doc.selectAll(selector)
     const values = nodes
       .map((node) =>
         type === 'text' ? cleanText(node.text(), options.clean ?? {}) : node.html(),

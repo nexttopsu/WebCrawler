@@ -1,406 +1,194 @@
 # 插件开发指南
 
-本文档面向想为 WebCrawler 扩展采集能力的开发者，介绍插件系统的设计原则、数据契约、清单规范、开发流程与管理方式。
+一句话：**插件是服务端源码的一部分**。在 `apps/server/src/plugins/` 下新建一个 `.ts` 文件，用 `definePlugin` 定义并 `export default`，重启服务就能用——**不用在任何地方登记**，服务端启动时会自动扫描目录。
 
-- 适用版本：核心 `@webcrawler/plugins` / `@webcrawler/core` `0.6.x`
-- 相关源码：`packages/plugins/`（契约与注册表）、`packages/core/`（采集引擎）、`apps/server/src/services/plugin-service.ts`（扫描、启停、登记）
-- 管理入口：Web 控制台「插件管理」页，或 `/api/plugins` 系列接口
-
----
-
-## 1. 设计原则
-
-插件系统刻意做得很窄，只解决一件事：**网站差异**。
-
-- 插件只负责「匹配站点 → 给出列表链接 → 解析详情」；
-- HTTP 请求、HTML 解析、正文清洗、数据校验全部由 `@webcrawler/core` 的采集引擎（`CrawlEngine`）提供；
-- 插件**不得**直接访问数据库，**不得**自行创建 HTTP 客户端或 Playwright 实例；
-- 代理、超时、取消信号、日志都由引擎通过 `CrawlContext` 注入，插件只消费；
-- 服务端**不联网安装第三方包、不做插件市场**，只做本地目录扫描 + 清单登记 + 启停。
-
-绝大多数网站**不需要写插件**：内置的通用站点插件（`GenericSitePlugin`）是配置驱动的，只要站点规则里有 `list` / `detail.fields`，它就能完成采集。什么时候才需要写代码插件？——站点有特殊交互（登录、接口签名、动态翻页协议等），通用规则引擎表达不了的时候。
+- 适用版本：核心 `0.7.x`（`PLUGINS_PACKAGE.version = 0.7.0`）
+- 相关源码：
+  - `apps/server/src/plugin-system/sdk.ts` — 编写入口 `definePlugin` 与类型约束
+  - `apps/server/src/plugin-system/types.ts` — 契约与返回结构
+  - `apps/server/src/plugins/` — 内置插件实现（可自由建子目录）
+  - `apps/server/src/plugins/index.ts` — 启动时递归扫描、自动汇总清单
+  - `apps/server/src/server/services/plugin-service.ts` — 启动注册与启停
+  - `apps/server/src/core/engine.ts` — 引擎接入
+- 现成示例：[`demo-fixture.ts`](apps/server/src/plugins/demo-fixture.ts)（最简）、[`examples/example-flow-news.ts`](apps/server/src/plugins/examples/example-flow-news.ts)（全流程）、[`examples/example-parser-clean.ts`](apps/server/src/plugins/examples/example-parser-clean.ts)（解析器）
 
 ---
 
-## 2. 插件类型
+## 1. 三分钟写第一个插件
 
-| 类型 | 值 | 职责 | 当前状态 |
+新建 `apps/server/src/plugins/my-site.ts`：
+
+```ts
+import { definePlugin, type FlowListItem } from '../plugin-system/sdk.js'
+
+export default definePlugin({
+  config: {
+    id: 'my-site',          // 规则里引用这个 id，改动会断掉已有规则
+    name: '我的站点',
+    type: 'flow',
+    version: '1.0.0',
+    description: '演示站点',
+  },
+
+  async getList(url, ctx) {
+    const response = await ctx.request.get(url)
+    if (!response.ok) throw new Error(`列表页打不开：HTTP ${response.status}`)
+
+    const doc = ctx.parser.parseHtml(response.text)
+    const links: FlowListItem[] = []
+    for (const item of doc.selectAll('.item')) {
+      const anchor = item.selectFirst('a')
+      const href = anchor?.attr('href')
+      if (!anchor || !href) continue
+      links.push({
+        url: ctx.parser.resolveUrl(href, response.finalUrl),
+        title: ctx.parser.cleanText(anchor.text()),
+      })
+    }
+    return links
+  },
+
+  async getDetail(url, ctx) {
+    const response = await ctx.request.get(url)
+    const doc = ctx.parser.parseHtml(response.text)
+    const title = ctx.parser.cleanText(doc.selectFirst('h1')?.text() ?? '')
+    if (!title) throw new Error('没有解析到标题')
+    return { title, content: doc.selectFirst('.content')?.html() ?? '' }
+  },
+})
+```
+
+**不用再改任何文件**：`src/plugins/index.ts` 在模块加载时递归扫描同目录，
+把所有 `export default` 的插件收进清单，进程启动时注册一次。
+
+重启服务，规则测试器里就能选到它。编辑过程中，`ctx`、返回值都有补全。
+
+### 目录约定
+
+```
+apps/server/src/plugins/
+├── index.ts                    # 汇总入口：自动扫描，永远不用编辑它
+├── demo-fixture.ts             # 平铺
+└── examples/                   # 可以任意套目录
+    ├── example-flow-news.ts
+    └── example-parser-clean.ts
+```
+
+- **可嵌套**：`news/site-a.ts`、`news/site-a/list.ts` 都行，层级不限，按业务/站点分组更清楚；
+- **`_` 与 `.` 开头会被跳过**：`_shared.ts` 这类工具模块放在同目录不会报错；
+- **`index.ts` 是入口**，不会被当成插件；子目录里的 `index.ts` 仍可以是插件；
+- **隐藏文件、`*.d.ts`、`node_modules`** 自动忽略；
+- 加载顺序按路径排序，日志和界面里的先后是稳定的。
+
+---
+
+## 2. 两种插件，四个函数
+
+| 类型 | `config.type` | 可实现的函数 | 职责 |
 | --- | --- | --- | --- |
-| 数据源 | `source` | 站点匹配 + 列表链接提取 + 详情解析 | 已实现（`SitePlugin` 契约 + 内置通用插件） |
-| 解析器 | `parser` | 从 HTML 中提取结构化数据 | 预留 |
-| 导出器 | `exporter` | 把文章写入外部系统 | 预留 |
-| 生命周期钩子 | `hook` | 任务前后的自定义逻辑 | 预留 |
+| 全流程 | `flow` | `getList(url, ctx)` / `getDetail(url, ctx)` | 自己抓页面、自己解析，规则里**只填分页方式** |
+| 解析器 | `parser` | `parseList(url, fields, ctx)` / `parseDetail(url, fields, ctx)` | 平台已抽好字段，插件做二次处理 |
 
-> 目前只有 `source` 类型有运行时契约（`SitePlugin`）。`parser` / `exporter` / `hook` 可以先登记清单占位，但引擎不会调用它们。
+- **两个函数可以只写任意一个**：只写 `getList` 就只出现在「列表插件」下拉里，只写 `getDetail` 就只出现在「详情插件」下拉里。
+- 能力不用声明，由实现的函数推导（`pluginSlots()`），不存在「声明了但没实现」的错配。
+- 类型与函数必须匹配：`flow` 里写 `parseList`、`parser` 里写 `getList`，编译期就报错。
 
 ---
 
-## 3. 插件目录与清单
+## 3. 返回值结构
 
-### 3.1 目录布局
+类型定义在 `plugin-system/types.ts`，`definePlugin` 会按它检查你的返回值。
 
-服务端从 **插件目录**（`PLUGIN_DIR` 环境变量，默认 `<进程工作目录>/plugins`）扫描**一层子目录**，每个子目录里放一份 `plugin.json`：
+**`getList` → `FlowListItem[]`**
 
-```text
-plugins/
-└── my-site-plugin/
-    ├── plugin.json      ← 清单（必须）
-    └── index.js         ← 插件代码（当前版本见 §6「运行边界」）
-```
-
-- 目录不存在时视为「没有本地插件」，扫描不报错；
-- 只有直接子目录会被扫描，不会递归；
-- 单个清单非法**不影响**其它插件，失败项逐条返回。
-
-### 3.2 plugin.json 规范
-
-```json
-{
-  "name": "my-site-plugin",
-  "version": "1.0.0",
-  "type": "source",
-  "entry": "index.js",
-  "description": "XX 门户专用采集插件",
-  "coreVersion": "^0.6.0",
-  "config": { "domains": ["example.com"] }
-}
-```
-
-字段校验规则（与服务端一致）：
-
-| 字段 | 必填 | 规则 |
+| 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `name` | ✅ | 2–64 字符，`^[A-Za-z0-9][A-Za-z0-9._-]*$`，全局唯一（重复名会被跳过） |
-| `version` | ✅ | 形如 `1.0.0` |
-| `type` | ✅ | `source` / `parser` / `exporter` / `hook` |
-| `entry` | — | 入口文件相对路径，≤200 字符，仅做登记 |
-| `description` | — | ≤200 字符 |
-| `coreVersion` | — | 兼容的核心版本范围；不兼容时**自动禁用**并记录原因 |
-| `config` | — | 任意 JSON 对象，API 返回时会做敏感值脱敏 |
+| `url` | ✅ | 文章地址。相对地址请用 `ctx.parser.resolveUrl()` 补全；非 `http(s)` 的条目会被引擎丢弃 |
+| `title` `author` `summary` `content` `coverUrl` `articleTime` | | 列表阶段就能拿到的字段，入库时直接用 |
+| `extra` | | 自定义字段，入库进 `extra` |
 
-`coreVersion` 支持 `*`、精确版本、`^`、`~`、`>=`、`>`、`<=`、`<` 及 `||` 组合，例如 `"^0.6.0"`、`">=0.5.0 <1.0.0"`、`"^0.5.0 || ^0.6.0"`。
+**`getDetail` → `FlowDetailResult`**
 
----
-
-## 4. 核心契约
-
-契约全部定义在 `packages/plugins/src/types.ts`，从 `@webcrawler/plugins` 导入。
-
-### 4.1 CrawlerPlugin（所有插件的基座）
-
-```ts
-interface CrawlerPlugin {
-  readonly name: string
-  readonly version: string
-  readonly type: PluginType
-  /** 注入能力（请求、解析、浏览器）；在这里保存引用，不要自己 new 客户端 */
-  initialize(services: CrawlServices): void | Promise<void>
-  destroy(): void | Promise<void>
-}
-```
-
-`CrawlServices` 来自 `@webcrawler/core`：
-
-```ts
-interface CrawlServices {
-  request: RequestClient        // 统一请求层（含代理、重试、编码、SSRF 防护）
-  parser: Parser                // CSS / XPath / JSONPath 解析器
-  browser: BrowserClient | null // Playwright 客户端；未启用时为 null
-}
-```
-
-### 4.2 SitePlugin（数据源插件）
-
-```ts
-interface SitePlugin extends CrawlerPlugin {
-  /** 判断该插件是否负责这个地址 */
-  match(url: string): boolean
-  /** 提取列表页中的文章链接 */
-  getList(context: CrawlContext): Promise<ArticleLink[]>
-  /** 解析详情页；link 省略时使用 context.url */
-  parseDetail(context: CrawlContext, link?: ArticleLink): Promise<ArticleData>
-}
-```
-
-注册表按 `listPlugins()` 的名称顺序调用 `match()`，**第一个匹配的插件**负责该地址。
-
-### 4.3 CrawlContext（运行时上下文）
-
-```ts
-interface CrawlContext {
-  site: SiteSnapshot          // id / name / domain / baseUrl / pluginName
-  category: CategorySnapshot  // 栏目 id / name / listUrl
-  rule: RuleSnapshot          // 该栏目绑定的采集规则（config: CrawlRuleConfig）
-  url: string                 // 当前处理的地址（列表页或详情页）
-  requestOptions: CrawlRequestOptions
-  proxy: ProxySettings | null // 生效代理；null = 直连
-  signal: AbortSignal         // 任务取消信号，贯穿请求与解析
-  logger: CrawlLogger         // debug/info/warn/error，写入 crawl_log
-  metadata: Record<string, unknown>  // 例如 { taskId }
-}
-```
-
-### 4.4 数据结构
-
-**列表线索 `ArticleLink`**：`{ title?, url, sourceUrl, metadata? }`——`url` 必须是绝对地址。
-
-**详情结果 `ArticleData`**（你的插件最终要产出它）：
-
-```ts
-{
-  siteId: string; categoryId: string;
-  title: string; url: string;
-  author?: string;
-  articleTime?: string; // 原站点发布时间（原始字符串，入库前统一转 ISO 8601）
-  summary?: string;     // 未给时由入库层按正文自动生成
-  content?: string;     // 纯文本正文
-  coverUrl?: string | null;
-  metadata?: Record<string, unknown>;
-}
-```
-
-### 4.5 错误处理
-
-插件内部异常应包装为 `PluginError`，错误码四选一：
-
-| 错误码 | 含义 |
-| --- | --- |
-| `NOT_INITIALIZED` | 未 `initialize` 就调用了能力 |
-| `NOT_MATCHED` | 该地址不属于本插件 |
-| `EXECUTION_FAILED` | 执行失败（规则缺失、选择器非法、网络异常等） |
-| `VALIDATION_FAILED` | 抓到的数据未通过校验 |
-
----
-
-## 5. 编写一个站点插件
-
-### 5.1 推荐写法：委托给引擎
-
-除非万不得已，不要自己写请求和解析——用 `CrawlEngine` 复用整条链路（请求 → 解析 → 清洗 → 校验），保证插件采集与「规则测试器」行为一致。下面的示例在通用逻辑之外增加站点特殊处理（比如先调登录接口拿 Cookie）：
-
-```ts
-// plugins/my-site-plugin/index.ts
-import { CrawlEngine, type CrawlServices } from '@webcrawler/core'
-import type { HttpResponse, RequestClient } from '@webcrawler/request'
-import {
-  PluginError,
-  PluginErrorCode,
-  type ArticleData,
-  type ArticleLink,
-  type CrawlContext,
-  type SitePlugin,
-} from '@webcrawler/plugins'
-
-export class MySitePlugin implements SitePlugin {
-  readonly name = 'my-site-plugin'
-  readonly version = '1.0.0'
-  readonly type = 'source' as const
-
-  private engine: CrawlEngine | null = null
-  private request: RequestClient | null = null
-  private cookie = ''
-
-  /** 注入能力：保存引用即可，不要自己 new 客户端 */
-  initialize(services: CrawlServices): void {
-    this.engine = new CrawlEngine(services)
-    this.request = services.request
-  }
-
-  destroy(): void {
-    this.engine = null
-    this.request = null
-    this.cookie = ''
-  }
-
-  /** 只负责 example.com（含子域名） */
-  match(url: string): boolean {
-    try {
-      return /(^|\.)example\.com$/.test(new URL(url).hostname)
-    } catch {
-      return false
-    }
-  }
-
-  /** 列表页：站点特殊逻辑 + 引擎通用提取 */
-  async getList(context: CrawlContext): Promise<ArticleLink[]> {
-    const engine = this.requireEngine()
-    try {
-      await this.ensureSession(context)
-      return await engine.listLinks(context)
-    } catch (error) {
-      if (error instanceof PluginError) throw error
-      throw this.wrap(error, 'list')
-    }
-  }
-
-  /** 详情页：委托引擎按规则解析并校验 */
-  async parseDetail(context: CrawlContext, link?: ArticleLink): Promise<ArticleData> {
-    const engine = this.requireEngine()
-    const target = link ?? { url: context.url, sourceUrl: context.url }
-    try {
-      const result = await engine.parseDetail(context, target)
-      if (!result.article) {
-        throw new PluginError(
-          this.name,
-          PluginErrorCode.VALIDATION_FAILED,
-          result.errors.join('；') || '数据校验未通过',
-          { missing: result.missing },
-        )
-      }
-      return result.article
-    } catch (error) {
-      if (error instanceof PluginError) throw error
-      throw this.wrap(error, 'detail')
-    }
-  }
-
-  /** 站点特殊逻辑示例：登录换会话 Cookie（必须走统一请求层，并响应取消信号） */
-  private async ensureSession(context: CrawlContext): Promise<void> {
-    if (this.cookie) return
-    const client = this.requireRequest()
-    const response: HttpResponse = await client.request({
-      url: 'https://passport.example.com/api/login',
-      method: 'POST',
-      body: { username: 'bot', password: '***' },
-      signal: context.signal,
-      timeoutMs: 10_000,
-    })
-    if (!response.ok) {
-      throw new PluginError(this.name, PluginErrorCode.EXECUTION_FAILED, `登录失败：HTTP ${response.status}`)
-    }
-    this.cookie = response.setCookies.join('; ')
-    context.logger.info('站点会话已刷新', { stage: 'plugin' })
-  }
-
-  private requireEngine(): CrawlEngine {
-    if (!this.engine) {
-      throw new PluginError(this.name, PluginErrorCode.NOT_INITIALIZED, '插件尚未初始化')
-    }
-    return this.engine
-  }
-
-  private requireRequest(): RequestClient {
-    if (!this.request) {
-      throw new PluginError(this.name, PluginErrorCode.NOT_INITIALIZED, '插件尚未初始化')
-    }
-    return this.request
-  }
-
-  private wrap(error: unknown, stage: string): PluginError {
-    const message = error instanceof Error ? error.message : String(error)
-    return new PluginError(this.name, PluginErrorCode.EXECUTION_FAILED, message, { stage })
-  }
-}
-```
-
-### 5.2 开发期手动注册（不走目录扫描）
-
-注册表暴露了 `registerPlugin()`，可以在代码里直接挂载运行时实例（测试或内嵌使用时的标准方式）：
-
-```ts
-import { createPluginRegistry } from '@webcrawler/plugins'
-import { createRequestClient } from '@webcrawler/request'
-import { createParser, CrawlEngine } from '@webcrawler/core'
-
-const registry = createPluginRegistry()
-const plugin = new MySitePlugin()
-await plugin.initialize({
-  request: createRequestClient({}),
-  parser: createParser(),
-  browser: null,
-})
-registry.registerPlugin(plugin)
-
-// 之后即可按地址派发：
-const sitePlugin = registry.findSitePlugin('https://www.example.com/news')
-```
-
-### 5.3 用 Vitest 验证
-
-参考现成用例：`packages/plugins/test/generic-plugin.test.ts`、`packages/plugins/test/registry.test.ts`。要点：
-
-- `match()` 用真实 URL 字符串断言（含子域名、非法 URL）；
-- `getList` / `parseDetail` 用本地 fixture 页面（项目里有 `:4100` fixture 服务的先例）驱动 `CrawlEngine`；
-- 断言错误路径：未初始化抛 `NOT_INITIALIZED`，不匹配的地址抛 `NOT_MATCHED`。
-
-运行：
-
-```bash
-pnpm --filter @webcrawler/plugins test
-```
-
----
-
-## 6. 运行边界（当前版本须知）
-
-当前版本（0.6.x）插件系统完成的是**清单层**的完整闭环，请务必了解以下边界：
-
-1. **目录扫描只登记清单，不动态 import 代码。** `plugin.json` 的 `entry` 目前仅做登记（落库、展示），服务端不会在运行时加载该文件并调用。
-2. **真正参与采集的运行时实例来自代码内置注册。** 引擎采集任务时走 `CrawlEngine` + 规则配置，等价于内置通用站点插件的行为；站点数据上的 `pluginName` 字段已经预留，动态加载器是下一阶段的路线图。
-3. **启停语义**：禁用会把插件从注册表移除（清单保留、状态 `disabled`）；启用会校验 `coreVersion`，不兼容直接拒绝。服务重启时按数据库的启用状态重建注册表（`refreshPlugins`），禁用的插件不会被扫描「复活」。
-4. **不兼容自动禁用**：扫描或刷新时发现 `coreVersion` 与当前核心版本（0.6.0）不匹配，插件会被自动置为禁用并写错误日志。
-
-因此，现阶段要让自定义采集逻辑生效，有两条路：
-
-- **配置优先**：把站点差异表达成规则（选择器、分页、浏览器模式等），交给通用插件跑——能覆盖 90% 的场景；
-- **代码内置**：像 `GenericSitePlugin` 一样把插件放进 `@webcrawler/plugins`（或你的服务端启动代码里）并 `registerPlugin()`，随服务一起构建发布。
-
----
-
-## 7. 插件管理 API
-
-| 方法 | 路径 | 说明 |
+| 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/plugins` | 分页列表，支持 `keyword` / `type` / `enabled` / `status` |
-| `GET` | `/api/plugins/:name` | 单个插件详情 |
-| `PATCH` | `/api/plugins/:name/status` | 启用/禁用，body `{ "enabled": true }`；空 body 为切换 |
-| `GET` | `/api/plugins/:name/errors` | 最近错误日志（最多 100 条） |
-| `POST` | `/api/plugins/scan` | 扫描插件目录，body `{ "directory": "..." }` 可覆盖默认目录；扫描后自动按启用状态重建注册表 |
-| `POST` | `/api/plugins/refresh` | 重建注册表（清空后按数据库启用状态登记） |
+| `title` | ✅ | 拿不到标题就 `throw`，引擎会把这一篇记为失败，而不是塞一条空标题进库 |
+| `url` | | 页面里抽到的规范地址；省略时用列表链接的地址（推荐省略，否则同 URL 去重会失效） |
+| 其余同上 | | |
 
-插件状态（`status`）含义：
+**`parseList` / `parseDetail` → `ArticleFields`（`Record<string, unknown>`）**
 
-| 状态 | 含义 |
+拿到的是 `url` + 当前字段对象，返回的对象**直接用于保存**。不想改就原样 `return fields`。
+
+---
+
+## 4. `ctx` 提供什么
+
+| 能力 | 说明 |
 | --- | --- |
-| `enabled` | 已启用且已登记进注册表 |
-| `disabled` | 已禁用 |
-| `invalid` | 数据库里启用，但注册表里没有（例如重启后加载失败） |
-| `incompatible` | 扫描时因核心版本不兼容被拒绝（错误原因见扫描结果与日志） |
+| `ctx.request` | 平台请求器（`get` / `post` / `getText` / `getJson`）。**纯 HTTP，不执行 JS**；已绑定本次运行的代理，SSRF 校验、重定向、超时、响应体上限由平台处理。单次请求传 `{ proxy: null }` 可强制直连。**不要自己造 HTTP 客户端** |
+| `ctx.fetchPage(url)` | 按本次运行的模式抓页面：`browser` 模式走浏览器渲染，返回 `{ html, finalUrl, status }`。与引擎内部抓取同一条路径（代理 / SSRF / 超时一致），所以插件不需要（也不该）自己 launch 浏览器 |
+| `ctx.proxy` / `ctx.mode` | 本次运行使用的代理与模式，只读。测试器里选的 Browser / 代理会原样传进来 |
+| `ctx.parser` | `parseHtml` / `selectAll` / `selectFirst` / `cleanText` / `htmlToText` / `cleanHtml` / `resolveUrl` / `normalizeUrl` / `extractImages` |
+| `ctx.logger` | `info` / `warn` / `error`，写入任务日志（不要用 `console`） |
+| `ctx.siteId` / `ctx.categoryId` | 当前站点与栏目（详情阶段才有栏目） |
+
+几个容易踩的点：
+
+- **`ctx.request` 吃不到浏览器**：它在任何模式下都是 HTTP。页面靠 JS 渲染（SPA、无限滚动）时必须用 `ctx.fetchPage`，否则拿到的只是空壳 HTML。
+- **`ctx.request` 走代理，但不受任务限速约束**：`IntervalLimiter` 只管「每篇文章之间」的间隔，插件在 `getList` 里循环发一百个请求不会被它拦住，需要自己控制节奏。
+- **重试默认关闭**：`ctx.request.get(url)` 的 `retries` 默认 0，需要重试时显式传 `{ retries: 2 }`。
+
+需要第三方包时直接 `pnpm add <pkg> --filter @webcrawler/server`，在插件里正常 `import`——插件和服务端同一个编译单元，不存在模块解析问题。但**解析 HTML、发请求这两件事优先用 `ctx` 提供的能力**，重复引一份 `cheerio` 只会让构建变重。
 
 ---
 
-## 8. 内置通用站点插件速查
+## 5. 类型约束能拦住什么
 
-`GenericSitePlugin`（`@webcrawler/plugins`）是配置驱动的参考实现，也可直接复用：
+`definePlugin` 的入参类型会做这些检查（`test/plugin-system/builtin.test.ts` 里有对应的 `@ts-expect-error` 用例）：
 
-```ts
-import { createGenericSitePlugin } from '@webcrawler/plugins'
+| 写法 | 结果 |
+| --- | --- |
+| `type: 'flow'` + `getList` | ✅ |
+| `type: 'flow'` + `parseList` | ❌ 全流程插件只能用 getList / getDetail |
+| 两个函数都不写 | ❌ 至少要实现一个 |
+| `getList` 返回 `[{ title }]` | ❌ 缺少必填的 `url` |
+| `getDetail` 返回 `{ author }` | ❌ 缺少必填的 `title` |
+| `type: 'parser'` + `getList` | ❌ 解析器插件只能用 parseList / parseDetail |
 
-const plugin = createGenericSitePlugin({
-  name: 'generic-site',
-  version: '0.2.0',
-  domains: ['cntc.org.cn'], // 省略则匹配所有站点
-})
-```
-
-- `match`：域名精确匹配或子域名匹配（自动去掉协议、端口、`www.`）；
-- `getList` / `parseDetail`：全部委托 `CrawlEngine`，异常统一包装为 `PluginError`；
-- 校验失败（`result.article` 为空）时抛 `VALIDATION_FAILED`，并附带缺失字段信息。
-
-对应的规则结构（`CrawlRuleConfig`）支持：`request`（HTTP/浏览器模式、编码、重试、Cookie 等）、`list`（`itemSelector` / `linkSelector` / `titleSelector` + 分页 `query` / `path` / `next` / `cursor`）、`detail.fields`（`text` / `html` / `attr` / `list` / `object`，CSS / XPath / JSONPath，`clean` 清理与 `required` 校验）、`clean`（移除广告选择器、保留图片）、`validate`（必填字段、最短长度）、`browser`（等待策略、视口、拦截资源）。完整字段见 `packages/shared/src/crawl.ts`。
+运行时还有一层兜底（`validatePluginModule`），挡住绕过 `definePlugin` 手写对象的情况。
 
 ---
 
-## 9. FAQ
+## 6. 注册、启停与生效时机
 
-**Q：插件里能发 HTTP 请求吗？**
-能，但必须用 `services.request`（或经 `CrawlEngine`），它会统一处理代理、重试、编码、体积上限与 SSRF 防护，并响应 `context.signal` 的取消。自己 `fetch` / `axios` 的后果是：不走代理、不受取消控制、错误无法归因。
+- **只在启动时注册一次**：`src/plugins/index.ts` 在模块加载时递归扫描目录（顶层 await），`createApp()` 再把清单写进内存注册表。运行期不扫描目录、不重读文件。
+- **数据库只存开关**：`plugin` 表只有 `pluginId + enabled`。名称、类型、支持位置、源码位置全部来自代码，不存在「库里和代码对不上」。
+- **改代码 → 重启服务**。`pnpm dev` 的 tsx watch 会自动重启。
+- **启停立即生效**：插件模块已在内存里，停用 = 从注册表移除，启用 = 写回注册表，同时落库，重启后保持。
+- 单个插件实现有问题只影响它自己：写日志、界面标成「实现有问题」，其它插件照常工作。
 
-**Q：插件能写数据库吗？**
-不能。插件产出 `ArticleData`，入库由服务端任务执行器负责。需要导出到外部系统属于 `exporter` 类型（预留中）。
+---
 
-**Q：为什么我的插件状态是 `invalid`？**
-数据库里是启用状态，但当前进程注册表里没有它。常见原因：清单非法、核心版本不兼容被自动禁用（看 `/api/plugins/:name/errors`）、或服务重启后未刷新注册表（0.6.x 起 `createApp` 启动时会自动 `refreshPlugins`）。
+## 7. 调试
 
-**Q：怎么确认插件被引擎选中了？**
-看任务日志（stage=`plugin` / `request`），或调用 `registry.findSitePlugin(url)` 在代码里验证匹配结果。注册表按名称顺序匹配第一个 `match()` 通过的插件，命名会影响优先级。
+1. **规则测试器**（`/tester`）：列表页签选「列表插件」、详情页签选「详情插件」，填地址直接跑，结果里能看到每条链接、每个字段。
+2. **插件管理**（`/plugins`）：看支持位置与源码位置，出错时在详情抽屉里查错误日志。
+3. **任务日志**（`/logs`）：`stage=plugin` 的记录就是插件在真实采集里的输出。
+
+调试技巧：在插件里 `ctx.logger.info(...)` 打点，比 `console.log` 更容易在日志页里过滤。
+
+---
+
+## 8. 常见问题
+
+**Q：能不能放一个 `.js` 插件到某个目录，让服务端自动加载？**
+只能放在 `src/plugins/` 下的任意子目录，跟着服务端一起编译；运行时不会读取仓库外的目录。这是有意的取舍：换来完整类型、第三方依赖、构建期检查，代价是新增插件要重新构建/重启。
+
+**Q：插件能不能单独发布 / 热更新？**
+不能。插件与服务端同版本编译，`config.version` 只是展示用的标签。需要跨项目复用时，把解析逻辑抽成普通模块，由插件 `import`。
+
+**Q：为什么没有「扫描」「重建注册表」按钮了？**
+插件是代码，不是运行时资源。`src/plugins/index.ts` 在模块加载时自动扫描目录并缓存结果，重启即生效；界面上那层「登记表」已经删掉，只剩启用开关。
+
+**Q：新加的插件没出现在列表里？**
+看日志里 `stage=plugin` 的错误：常见原因是文件没有 `export default definePlugin(...)`、`config.type` 与实现的函数不匹配、或 `config.id` 与已有插件重复。单个文件出错不影响其它插件，修好后重启即可。

@@ -7,6 +7,3 @@ packages:
 allowBuilds:
   esbuild: true
   playwright: true
-
-minimumReleaseAgeExclude:
-  - linkedom@0.18.15

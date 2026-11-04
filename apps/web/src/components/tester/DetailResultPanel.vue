@@ -7,6 +7,8 @@ const props = defineProps<{
   result: TesterDetailResultDto | null
   testing: boolean
   hasFields: boolean
+  /** 选中详情插件：字段由插件返回，没有字段配置也能测试 */
+  pluginMode?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -34,7 +36,7 @@ async function copyJson(): Promise<void> {
         type="primary"
         size="small"
         :loading="testing"
-        :disabled="!hasFields"
+        :disabled="!hasFields && !pluginMode"
         :icon="RefreshCw"
         @click="emit('test')"
       >
@@ -80,7 +82,13 @@ async function copyJson(): Promise<void> {
       </table>
       <p v-else class="empty">{{ result.message }}</p>
     </template>
-    <p v-else class="empty">配置字段后点击「测试详情规则」，将调用真实解析引擎并显示每个字段的提取状态。</p>
+    <p v-else class="empty">
+      {{
+        pluginMode
+          ? '点击「测试详情规则」，由详情插件直接返回文章字段。'
+          : '配置字段后点击「测试详情规则」，将调用真实解析引擎并显示每个字段的提取状态。'
+      }}
+    </p>
   </div>
 </template>
 

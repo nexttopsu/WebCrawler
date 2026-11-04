@@ -1,6 +1,6 @@
 {
   "name": "webcrawler",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "WebCrawler - 插件化网页采集平台（pnpm workspace：apps/server + apps/web）",

@@ -20,7 +20,7 @@ import { articleRoutes } from './routes/articles.js'
 import { logRoutes } from './routes/logs.js'
 import { scheduleRoutes } from './routes/schedules.js'
 import { pluginRoutes } from './routes/plugins.js'
-import { refreshPlugins } from './services/plugin-service.js'
+import { registerBuiltinPlugins } from './services/plugin-service.js'
 import { settingRoutes } from './routes/settings.js'
 import { statsRoutes } from './routes/stats.js'
 import { applySettings, readSettings, setSettingDefaults } from './services/settings-service.js'
@@ -84,9 +84,10 @@ export function createApp(options: CreateAppOptions = {}): H3 {
   setSettingDefaults(config)
   applySettings(readSettings(), { runtime: runtime.tasks, logger, config })
 
-  // 启动时按数据库里的启用状态重建注册表（含插件代码动态加载，异步执行）。
-  // 不重建的话，进程重启后注册表是空的，所有插件都会被误判成「加载失败」。
-  void refreshPlugins(registry).catch(() => undefined)
+  // 启动时注册内置插件：`src/plugins/index.ts` 在模块加载时已递归扫描完目录，
+  // 这里只是把清单一次性写进注册表。运行期不再扫描目录或重读文件，改插件代码需重启服务。
+  // 外部注入注册表时（测试）由调用方决定注册什么，这里不覆盖。
+  if (!options.plugins) registerBuiltinPlugins(registry)
 
   const serviceDeps = {
     request,

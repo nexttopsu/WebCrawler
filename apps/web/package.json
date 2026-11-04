@@ -1,6 +1,6 @@
 {
   "name": "@webcrawler/web",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "WebCrawler 前端：Vue 3 + Element Plus 管理界面",

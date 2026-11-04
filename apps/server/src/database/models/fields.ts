@@ -180,14 +180,17 @@ export type ProxyRow = ModelRow<ProxyFields>
 export const PROXY_TABLE = 'proxy'
 
 /** 插件。 */
+/**
+ * 插件开关。
+ *
+ * 插件本身编在代码里（`src/plugins`），名称、类型、支持位置都由源码决定；
+ * 这张表只回答一件事：用户有没有手动把它关掉。
+ */
 export const pluginFields = {
-  name: 'TEXT',
-  version: 'TEXT',
-  type: 'TEXT',
-  entry: 'TEXT',
+  /** 稳定标识（来自插件 config.id），规则里引用它 */
+  pluginId: 'TEXT',
+  /** 1 = 启用、0 = 停用 */
   enabled: 'INTEGER',
-  description: 'TEXT',
-  config: 'TEXT',
 } as const satisfies ModelFields
 export type PluginFields = typeof pluginFields
 export type PluginRow = ModelRow<PluginFields>

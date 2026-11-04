@@ -71,12 +71,12 @@ describe('代理管理', () => {
     await call(
       app,
       '/api/proxies',
-      json({ name: 'SOCKS 出口', type: 'socks5', host: '127.0.0.2', port: 1080, enabled: false }),
+      json({ name: 'HTTPS 出口', type: 'https', host: '127.0.0.2', port: 8443, enabled: false }),
     )
 
-    const socks = await call(app, '/api/proxies?type=socks5')
-    expect(socks.body.data.total).toBe(1)
-    expect(socks.body.data.items[0].type).toBe('socks5')
+    const https = await call(app, '/api/proxies?type=https')
+    expect(https.body.data.total).toBe(1)
+    expect(https.body.data.items[0].type).toBe('https')
 
     const disabled = await call(app, '/api/proxies?enabled=false')
     expect(disabled.body.data.total).toBe(1)

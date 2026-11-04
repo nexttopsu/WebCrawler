@@ -18,7 +18,6 @@ export type {
   CrawlRuleConfig,
   FieldRule,
   RuleSnapshot,
-  SelectorType,
   SiteSnapshot,
   CategorySnapshot,
 } from '../shared/index.js'

@@ -109,25 +109,19 @@ export const ProxyStatus = {
 } as const
 export type ProxyStatus = (typeof ProxyStatus)[keyof typeof ProxyStatus]
 
-/** 代理协议。 */
+/** 代理协议：只支持 HTTP / HTTPS。 */
 export const ProxyProtocol = {
   HTTP: 'http',
   HTTPS: 'https',
-  SOCKS4: 'socks4',
-  SOCKS5: 'socks5',
 } as const
 export type ProxyProtocol = (typeof ProxyProtocol)[keyof typeof ProxyProtocol]
 
 /** 插件类型。 */
 export const PluginType = {
-  /** 数据源（列表页/详情页的抓取策略） */
-  SOURCE: 'source',
-  /** 解析器（从 HTML 中提取结构化数据） */
+  /** 全流程：接管列表页 / 详情页的抓取与解析，规则里只填分页 */
+  FLOW: 'flow',
+  /** 解析器：对平台已抽取的字段做二次处理 */
   PARSER: 'parser',
-  /** 导出器（把文章写入外部系统） */
-  EXPORTER: 'exporter',
-  /** 生命周期钩子 */
-  HOOK: 'hook',
 } as const
 export type PluginType = (typeof PluginType)[keyof typeof PluginType]
 

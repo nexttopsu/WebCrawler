@@ -10,6 +10,6 @@ export interface PackageInfo {
 
 export const SHARED_PACKAGE: PackageInfo = {
   name: 'shared',
-  version: '0.6.0',
+  version: '0.7.0',
   description: '公共类型与常量',
 }

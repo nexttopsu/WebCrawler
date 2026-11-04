@@ -20,6 +20,6 @@ export * from './task/pagination.js'
 
 export const CORE_PACKAGE = {
   name: 'core',
-  version: '0.6.0',
+  version: '0.7.0',
   description: '采集核心：解析、清洗、校验与管道',
 } as const

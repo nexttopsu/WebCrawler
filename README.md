@@ -19,8 +19,7 @@
 | 数据库 | SQLite（WAL） | — |
 | 请求 | request-pack（axios 1.21） | 1.1.1 |
 | 浏览器 | Playwright（Chromium Headless Shell） | 1.64.1 |
-| SOCKS5 适配 | socks-proxy-agent | 10.1.0 |
-| HTML 解析 | cheerio（CSS）/ linkedom + xpath（XPath） | 1.0.0 / 0.18.15 / 0.0.36 |
+| HTML 解析 | cheerio（CSS 选择器） | 1.0.0 |
 | 前端 | Vue 3 + Vite | 3.5.44 / 8.3.5 |
 | UI | Element Plus + Lucide | 2.14.7 / @lucide/vue 1.66.0 |
 | 校验 | Zod | 4.6.7 |
@@ -37,7 +36,8 @@
 │   │   │   ├── database        # ORMlet 模型 + 迁移
 │   │   │   ├── request         # 统一请求层：HTTP / 浏览器 / 代理 / SSRF
 │   │   │   ├── core            # 采集核心：解析、清洗、校验、管道、引擎
-│   │   │   ├── plugin-system   # 插件契约、注册表、通用站点插件
+│   │   │   ├── plugin-system   # 插件类型 SDK（definePlugin）、契约与注册表
+│   │   │   ├── plugins         # 内置插件：一个 .ts 文件 = 一个插件，启动时自动扫描（支持子目录）
 │   │   │   └── shared          # 公共类型：API 结构、领域枚举、采集契约
 │   │   ├── test                # 后端 Vitest 测试
 │   │   └── scripts             # fixture 站点、种子数据、冒烟脚本
@@ -55,7 +55,7 @@
 | --- | --- |
 | `http-client.ts` | 统一 HTTP 入口：重定向逐跳校验、流式限流、幂等重试、编码识别、TLS 链自动补全（AIA） |
 | `browser-client.ts` | Playwright 封装：复用 Browser、按次隔离 Context、并发页限制 |
-| `proxy-resolver.ts` | 代理解析、优先级选择、HTTP/HTTPS/SOCKS5 适配、脱敏 |
+| `proxy-resolver.ts` | 代理解析、优先级选择、HTTP/HTTPS 适配、脱敏 |
 | `ssrf-guard.ts` | 协议白名单、IP 段判定、DNS 校验、连接时 lookup 校验 |
 | `chain-recovery.ts` | TLS 链自动补全：识别缺中间证书错误，按 AIA 下载缺失证书后安全重试 |
 | `request-types.ts` | 请求参数、响应、浏览器结果类型 |
@@ -65,7 +65,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| `parser/document.ts` | CSS（cheerio）与 XPath（linkedom + xpath）双适配器 |
+| `parser/document.ts` | 文档模型：cheerio 的 `HtmlDocument` / `MatchedNode` 抽象（仅 CSS） |
 | `parser/extract.ts` | 字段提取：单值/多值、嵌套、必填、默认值、匹配数量 |
 | `parser/index.ts` | `Parser` 门面：parseHtml / parseJson / extractText / … |
 | `clean.ts` | 文本清洗、HTML 清洗（去脚本/事件属性/危险协议）、图片提取 |
@@ -105,7 +105,7 @@
 | `services/proxy-service.ts` / `proxy-stats.ts` | 代理 CRUD、密码加解密、连通性测试、使用统计批量 flush |
 | `services/log-service.ts` | 日志写入（脱敏）与查询、按保留天数清理 |
 | `services/stats-service.ts` | 仪表盘总览：计数、今日采集、成功率、14 天趋势、代理分布 |
-| `services/plugin-service.ts` | 插件目录扫描、清单校验、semver 兼容判定、注册表重建、错误日志 |
+| `services/plugin-service.ts` | 内置插件启动注册、能力推导、启停（内存 + 落库）、错误日志 |
 | `services/settings-service.ts` | 设置白名单与 KV 存储、缓存、运行时生效（并发 / 限速 / 重试 / 日志级别 / 时区 / 默认代理） |
 | `lib/crypto.ts` / `proxy-secret.ts` / `redact.ts` | AES-256-GCM 密码、进程级密钥、URL / 字段 / 文本脱敏 |
 | `lib/cron.ts` | cron 校验、`nextRunAt` 计算、默认时区 |
@@ -166,7 +166,7 @@ node apps/server/scripts/smoke-tester.mjs
 第六阶段界面冒烟（需先启动 fixture、后端与前端）：
 
 ```bash
-node scripts/seed-demo.mjs     # 通过真实接口造一份演示数据（站点/规则/栏目/任务/代理/插件）
+node scripts/seed-demo.mjs     # 通过真实接口造一份演示数据（站点/规则/栏目/任务/代理）
 node scripts/ui-smoke.mjs      # 逐页加载 + 截图 + 控制台错误检查 + 主题/路由/按钮行为
 ```
 
@@ -197,7 +197,6 @@ pnpm --filter @webcrawler/core demo:crawl
 | `TASK_RATE_LIMIT_MS` | `300` | 同一栏目两次请求的最小间隔（1-60000） |
 | `SCHEDULER_ENABLED` | `true` | 是否启动定时任务调度器（`false` 时任务仍可手动创建） |
 | `PROXY_TEST_URL` | `https://www.example.com` | 代理连通性测试的默认目标地址 |
-| `PLUGIN_DIR` | `<cwd>/plugins` | 本地插件目录，`/api/plugins/scan` 默认扫描这里 |
 | `VITE_API_BASE_URL` | `/api` | 前端接口前缀 |
 
 ## API 约定
@@ -265,7 +264,7 @@ pnpm --filter @webcrawler/core demo:crawl
 | POST | `/api/tester/snapshot` | 页面快照：清洗后的 HTML + 标题 + 最终 URL + 状态码 + 耗时 |
 | POST | `/api/tester/list` | 未保存的列表规则试跑（真实请求层 + `CrawlEngine.listPage`） |
 | POST | `/api/tester/detail` | 未保存的字段映射试跑（同一条 `runPipeline`） |
-| POST | `/api/tester/selector` | 在真实文档中验证 Selector 匹配数量（支持 CSS / XPath） |
+| POST | `/api/tester/selector` | 在真实文档中验证 CSS Selector 的匹配数量 |
 | POST | `/api/tester/rule/validate` | 用第三阶段 Schema 校验规则 JSON |
 | DELETE | `/api/sites/:id`、`/api/categories/:id`、`/api/rules/:id` | 默认「限制删除」，带 `?force=true` 只解除配置引用 |
 
@@ -297,7 +296,6 @@ pnpm --filter @webcrawler/core demo:crawl
 ```
 
 - `type`：`text` / `html` / `attr` / `list` / `object`；`list`/`object` 可无限嵌套字段映射。
-- `selectorType`：`css`（默认）或 `xpath`。XPath 使用独立适配器，不做字符串替换伪装。
 - `jsonPath`：JSON 响应使用，如 `data.items[*].url`。
 - `required` / `defaultValue` / `multiple` / `clean`：必填、兜底、多值与字段级清洗。
 - 标准字段：`title` / `url` / `author` / `summary` / `content` / `coverUrl` / `articleTime`——列表规则与详情规则共用同一套内置字段；
@@ -369,7 +367,7 @@ pnpm --filter @webcrawler/core demo:crawl
 3. 有意义的父级锚点 + 相对路径；
 4. `:nth-of-type` 位置路径兜底。
 
-每个候选都要在真实 DOM 里 `querySelectorAll` 验证「命中唯一且包含目标元素」，不靠 class 字符串猜唯一性；界面显示匹配数量并区分唯一 / 多匹配 / 无匹配 / 语法非法，可手动改写后在 iframe 内或服务端（支持 XPath）重新验证。
+每个候选都要在真实 DOM 里 `querySelectorAll` 验证「命中唯一且包含目标元素」，不靠 class 字符串猜唯一性；界面显示匹配数量并区分唯一 / 多匹配 / 无匹配 / 语法非法，可手动改写后在 iframe 内或服务端重新校验。
 
 **配置与保存**
 
@@ -385,7 +383,6 @@ pnpm --filter @webcrawler/core demo:crawl
 
 - **代理优先级**：任务 > 栏目 > 网站 > 系统 > 直连（`resolveProxy`）。
 - **HTTP / HTTPS 代理**：使用 request-pack 原生 `proxy` 配置（axios 1.16+ 的 CONNECT 隧道）。
-- **SOCKS5**：通过 `socks-proxy-agent` 作为 `httpAgent` / `httpsAgent` 接入；SOCKS4 明确返回 `UNSUPPORTED`，不静默直连。
 - **重定向**：`maxRedirects: 0` 手动跟随，逐跳重新执行 SSRF 校验并记录每一跳。
 - **响应体上限**：流式读取，超限立即中断（`RESPONSE_TOO_LARGE`），默认 5 MiB。
 - **重试**：只对 GET / HEAD 与 408/425/429/5xx 生效；POST 永不自动重发。
@@ -503,7 +500,7 @@ running ──▶ cancelled
 - `001-initial-indexes`：随模型同步的完整索引集，新库一次建好。
 - `002-stage3-upgrade`：第三阶段增量升级，用于老库原地演进——`site.url → baseUrl`（按域名补 `https://`）、`site.remark → description`、`category.url → listUrl`、`category.status → enabled`、`crawl_rule` 旧选择器列折叠成合法 JSON，并补 v1 版本快照、回填 `crawl_task.ruleVersion`。已在真实的旧库副本上验证列变更无数据丢失。
 - `003-stage5-indexes`：第五阶段索引——任务（`siteId+status`、`status+createdAt`、`scheduleId`）、文章（`contentHash`、`crawlTime`）、代理（`enabled`）、`ux_crawl_schedule_name`、日志（`taskId+id`、`level`、`createdAt`）。
-- 唯一索引：`site.domain`、`category(siteId,listUrl)`、`category(siteId,code)`、`crawl_rule(siteId,name)`、`crawl_rule_version(ruleId,version)`、`article.url`、`crawl_schedule.name`、`proxy(protocol,host,port)`、`plugin.name`、`system_setting.settingKey`。
+- 唯一索引：`site.domain`、`category(siteId,listUrl)`、`category(siteId,code)`、`crawl_rule(siteId,name)`、`crawl_rule_version(ruleId,version)`、`article.url`、`crawl_schedule.name`、`proxy(protocol,host,port)`、`plugin.pluginId`、`system_setting.settingKey`。
 
 ### ORMlet 的边界（有意为之）
 
@@ -533,7 +530,7 @@ ORMlet 只接受 `TEXT` / `INTEGER` / `REAL` / `BLOB`，不支持 `NOT NULL`、`
 | `/articles` | 文章数据 | 关键词 / 网站 / 栏目 / 状态 / 时间筛选、批量选择、批量删除、JSON 与 CSV 导出 |
 | `/articles/:id` | 文章详情 | 正文排版、纯文本、图片预览、原始 HTML、JSON、删除 |
 | `/proxies` | 代理管理 | 列表 / 新增 / 编辑 / 删除 / 启停 / 连通性测试 / 使用统计，密码只显示「已配置」 |
-| `/plugins` | 插件管理 | 已登记插件列表、详情、配置、错误日志、扫描本地目录、重建注册表 |
+| `/plugins` | 插件管理 | 内置插件列表（id / 类型 / 支持位置 / 源码位置）、详情、错误日志、启用停用 |
 | `/logs` | 日志中心 | 任务 / 网站 / 级别 / 阶段 / 时间 / 关键词筛选、展开详情、复制、跳转任务 |
 | `/settings` | 系统设置 | 分组表单（请求 / 任务 / 浏览器 / 日志 / 系统）、生效方式标注、只读运行信息、脏值保存与撤销 |
 
@@ -553,12 +550,12 @@ ORMlet 只接受 `TEXT` / `INTEGER` / `REAL` / `BLOB`，不支持 `NOT NULL`、`
 - **HTML 预览**：服务端落库前已清洗一次，前端渲染前再用 `sanitizeHtml()` 走白名单二次清洗（丢 script/style/iframe、去 `on*`、拦 `javascript:`），纵深防御；正文限宽 820px，避免长文一行读不完。
 - **站内相对图片**：清洗阶段只拦伪协议，不把「无协议相对地址」当危险链接删掉，随后统一按文章地址转绝对路径，`upload/2026/a.jpg` 这类写法不会再丢图。
 - **设置生效**：`/api/settings` 只接受白名单键；保存后立即作用到运行时（任务并发、限速、重试、日志级别、时区、默认代理），进程重启时也会重放上次保存值。
-- **插件管理**：扫描本地目录的 `plugin.json` 登记清单，semver 判定核心版本兼容性；不兼容自动禁用并写日志，但不会让服务启动失败；启动时按数据库启用状态重建注册表。
+- **插件管理**：插件内置在 `apps/server/src/plugins/`，一个 `.ts` 文件就是插件——用 `definePlugin` 定义并 `export default` 即可，无需登记；`src/plugins/index.ts` 在进程启动时递归扫描目录（支持子目录、跳过 `_`/`.` 开头的文件）自动汇总，运行期不再读文件。类型层校验 `type` 与实现的函数是否匹配、返回值结构（`getList` 必须给 `url`，`getDetail` 必须给 `title`）；数据库只存 `pluginId + enabled` 开关，启停立即生效并持久化，改插件代码需要重启服务。
 
 ### 生产构建与部署
 
 ```bash
-pnpm build                      # shared → database/request/core/plugins → server(dist) + web(dist)
+pnpm build                      # shared → database/request/core/plugin-system → server(dist) + web(dist)
 pnpm --filter @webcrawler/server start        # 或 node apps/server/dist/index.js
 ```
 
@@ -571,12 +568,12 @@ pnpm --filter @webcrawler/server start        # 或 node apps/server/dist/index.
 
 已完成（第五阶段）：任务数据模型与状态机、后台任务执行器（排队 / 并发 / 限速 / 暂停恢复取消 / 超时 / 重试 / 进度统计）、重启恢复、定时任务（croner）、增量与四层去重、文章管理（筛选 / 详情 / 原始 HTML / 批量删除 / JSON 与 CSV 流式导出）、代理 CRUD（加密存储、连通性测试、使用统计）、日志与全链路脱敏，以及 `/api/tasks`、`/api/articles`、`/api/proxies`、`/api/logs`、`/api/schedules` 五组接口。
 
-已完成（第六阶段）：`/api/stats/overview`、`/api/plugins`、`/api/settings` 三组接口；13 个管理页面、15 个公共组件、设计 Token 与暗色主题、统一 Axios 封装与错误处理、任务进度轮询、HTML 二次清洗、插件扫描与启停、设置即时生效。
+已完成（第六阶段）：`/api/stats/overview`、`/api/plugins`、`/api/settings` 三组接口；13 个管理页面、15 个公共组件、设计 Token 与暗色主题、统一 Axios 封装与错误处理、任务进度轮询、HTML 二次清洗、内置插件注册与启停、设置即时生效。
 
 尚未实现（明确不做，避免被误认为「已经能用」）：
 
 - 认证授权与多用户隔离：当前是单用户内网工具，没有登录态。
-- 插件在线市场与自动安装：只扫描本地目录的清单，不联网、不执行第三方代码；`entry` 仅作记录。
+- 插件只能内置：没有在线市场、没有外部目录加载，新增插件需要改源码后重新构建。
 - 分布式部署：任务队列与并发控制在单进程内，SQLite 为单写者。
 - `next` / `cursor` 分页：保存规则时即报错，不假装支持。
 
@@ -584,20 +581,17 @@ pnpm --filter @webcrawler/server start        # 或 node apps/server/dist/index.
 
 - `node:sqlite` 在 Node 22 仍为实验特性，启动会打印 `ExperimentalWarning`，不影响功能。
 - 浏览器模式需要先执行 `npx playwright install chromium`；未安装时返回 `BROWSER_ERROR` 并给出提示。
-- XPath 适配器在把 HTML 交给 linkedom 前会剥离 DOCTYPE：`xpath` 库遇到 DocumentType 节点会让整个文档的 `//*` 返回空集（已实测）。
-- CSS 与 XPath 由两个解析器分别处理；跨适配器的嵌套查询通过序列化子树重新解析，畸形 HTML 下两者树结构可能有细微差异。
 - 分页器支持 `none` / `query` / `path` 的实际多页执行；`next`（跟随「下一页」链接）与 `cursor` 会明确抛 `PaginationError`，保存时即报错，不假装支持。规则测试器仍只抓入口页。
 - 规则版本目前是「全量快照」，未做增量 diff；版本数量随配置修改线性增长，清理策略留待后续。
 - 栏目 `code` 在站点内唯一、URL 在站点内唯一，跨站点允许重复（不同站点可以有同名栏目）。
 - 预览为安全起见移除了目标页面的 `<style>` 与 `<link>`，因此看到的是「无样式但结构真实」的 DOM——点选与选择器验证不受影响，但不等同于截图。需要截图能力时可另走浏览器截图接口。
-- 预览内只校验 CSS；XPath 必须点「服务端验证」，因为 iframe 内没有 XPath 适配器。
 - 快照 HTML 上限 3 MB、字符数上限 200 万，超出会截断并标注；列表预览最多返回 20 条链接。
 - 任务队列在内存中：进程崩溃时排队的任务靠「重启扫描 `pending`」重新入队，队列顺序不保证与崩溃前一致。
 - 任务执行是单进程内的并发控制；多实例部署需要外部分布式锁，当前未实现（SQLite 也是单写者）。
 - 增量过滤依赖文章表的 `articleTime` / `createdAt`，历史脏数据（文章时间解析失败）会被当作「新文章」重新采集。
 - 代理使用统计是 5s 批量落盘，进程被强杀会丢失最后几秒的计数。
 - 前端按路由懒加载，但 Element Plus 与 ECharts 让首屏主包仍在 1 MB 左右（gzip 约 330 KB）；内网后台可接受，公网部署建议再做组件级按需引入。
-- 插件只登记清单，不加载 `entry` 指向的代码：`plugin.json` 里的 `entry` 仅作记录，第三方插件运行需要另外的加载器。
+- 插件与服务端同进程执行，没有沙箱：插件代码等同于后端代码，能访问 `ctx.request` 之外的 Node 能力。
 - 设置中的并发 / 限速修改对**已经在跑**的任务不打断（下一次调度才用新值）；`系统时区` 改变只影响此后新建的定时任务。
 - 列表分页上限 100 条/页（服务端限制），文章导出上限 1000 条/次（可调到 5000）。
 - 任务详情的执行日志一次取 100 条，更长的时间线请到日志中心按任务筛选。

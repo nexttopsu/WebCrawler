@@ -32,7 +32,7 @@ const list = useListQuery<ProxyDto, { keyword: string; type: string; status: str
   (params) =>
     listProxies({
       ...params,
-      type: (params.type || undefined) as 'http' | 'https' | 'socks5' | undefined,
+      type: (params.type || undefined) as 'http' | 'https' | undefined,
       status: (params.status || undefined) as ProxyDto['status'] | undefined,
       enabled: (params.enabled || undefined) as 'true' | 'false' | undefined,
     }),
@@ -48,7 +48,7 @@ const formRef = ref<FormInstance>()
 
 const form = reactive({
   name: '',
-  type: 'http' as 'http' | 'https' | 'socks5',
+  type: 'http' as 'http' | 'https',
   host: '',
   port: 8080,
   username: '',
@@ -229,7 +229,6 @@ function successRate(row: ProxyDto): string {
       <el-select v-model="list.filters.type" placeholder="全部协议" clearable style="width: 130px" @change="list.search()">
         <el-option label="HTTP" value="http" />
         <el-option label="HTTPS" value="https" />
-        <el-option label="SOCKS5" value="socks5" />
       </el-select>
       <el-select v-model="list.filters.status" placeholder="全部状态" clearable style="width: 130px" @change="list.search()">
         <el-option label="未检测" value="unknown" />
@@ -346,7 +345,6 @@ function successRate(row: ProxyDto): string {
           <el-radio-group v-model="form.type">
             <el-radio-button value="http">HTTP</el-radio-button>
             <el-radio-button value="https">HTTPS</el-radio-button>
-            <el-radio-button value="socks5">SOCKS5</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="主机" prop="host">

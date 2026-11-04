@@ -5,14 +5,14 @@ export interface ProxyListParams {
   page?: number
   pageSize?: number
   keyword?: string
-  type?: 'http' | 'https' | 'socks5'
+  type?: 'http' | 'https'
   status?: 'unknown' | 'available' | 'unavailable' | 'disabled'
   enabled?: 'true' | 'false'
 }
 
 export interface ProxyInput {
   name?: string
-  type: 'http' | 'https' | 'socks5'
+  type: 'http' | 'https'
   host: string
   port: number
   username?: string | null

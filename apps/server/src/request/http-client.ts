@@ -28,9 +28,7 @@ import type {
 } from './request-types.js'
 import {
   assertProxyUsable,
-  createProxyAgents,
   formatProxyForLog,
-  isSocksProxy,
   toNativeProxyConfig,
 } from './proxy-resolver.js'
 import { SsrfBlockedError, assertUrlAllowed, createGuardedLookup, type SsrfPolicy } from './ssrf-guard.js'
@@ -560,17 +558,13 @@ export class RequestClient {
       }
   }
 
-  /** 根据代理类型选择传输方式。 */
+  /** 选择传输方式：直连走带 SSRF 校验的 Agent，配了代理就交给 axios 原生 proxy。 */
   private buildTransport(proxy: ProxySettings | null): Record<string, unknown> {
-    if (proxy) {
-      assertProxyUsable(proxy)
-      if (isSocksProxy(proxy)) {
-        const agents = createProxyAgents(proxy)
-        return { httpAgent: agents.httpAgent, httpsAgent: agents.httpsAgent }
-      }
-      return { proxy: toNativeProxyConfig(proxy) }
+    if (!proxy) {
+      return { httpAgent: this.guardedHttpAgent, httpsAgent: this.guardedHttpsAgent }
     }
-    return { httpAgent: this.guardedHttpAgent, httpsAgent: this.guardedHttpsAgent }
+    assertProxyUsable(proxy)
+    return { proxy: toNativeProxyConfig(proxy) }
   }
 
   /** 请求前校验 URL，把 SSRF 错误转成统一的请求异常。 */

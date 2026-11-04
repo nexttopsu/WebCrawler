@@ -55,7 +55,6 @@ export function stripElements(html: string, selectors: readonly string[]): strin
 /** 判断字段能否编译成 request-pack schema（CSS + 内置组合器可表达的子集）。 */
 function isRpCompatible(rule: FieldRule): boolean {
   if (rule.jsonPath) return false
-  if (rule.selectorType === 'xpath') return false
   if (rule.type === 'attr' && !rule.attribute) return false
   if ((rule.type === 'object' || rule.type === 'list') && !rule.fields) return false
   return true
@@ -138,7 +137,7 @@ function countMatches(doc: HtmlDocument, rule: FieldRule): number {
   const selector = rule.selector?.trim()
   if (!selector) return 1
   try {
-    return doc.selectAll(selector, 'css').length
+    return doc.selectAll(selector).length
   } catch {
     return 0
   }
@@ -174,7 +173,7 @@ function extractSingleRpField(
  * 用 request-pack `html2object` 提取一组字段。
  *
  * - CSS 且可编译的字段：一次 `html2object` 调用整体解析；
- * - `jsonPath` 或 XPath 字段：回退到内置提取器（与 JSON 模式同一实现）。
+ * - `jsonPath` 字段：回退到内置提取器（与 JSON 模式同一实现）。
  */
 export function extractFieldsViaHtml2Object(
   html: string,
@@ -219,7 +218,7 @@ export function extractFieldsViaHtml2Object(
     }
   }
 
-  // 2. 回退路径：jsonPath / XPath 字段交给内置提取器
+  // 2. 回退路径：jsonPath 字段交给内置提取器
   if (Object.keys(legacyRules).length > 0) {
     const legacy = legacyExtractFields(doc, legacyRules, validate)
     for (const [key, extraction] of Object.entries(legacy.fields)) {
@@ -243,17 +242,15 @@ export function extractFieldsViaHtml2Object(
  * 把列表字段配置编译成 `loop(itemSelector, fields)` 并提取全部列表项。
  *
  * 返回原始对象数组（未做 URL 归一化），调用方（引擎）负责绝对地址、
- * 去重与 ArticleLink 组装。itemSelectorType=xpath 或字段含 jsonPath 时
- * 回退到内置提取器逐项解析。
+ * 去重与 ArticleLink 组装。字段含 jsonPath 时回退到内置提取器逐项解析。
  */
 export function extractListItems(
   html: string,
   itemSelector: string,
-  itemSelectorType: 'css' | 'xpath' | undefined,
   fields: Record<string, FieldRule>,
 ): Record<string, unknown>[] {
   const allCompatible = Object.values(fields).every((rule) => isRpCompatible(rule))
-  if (allCompatible && (itemSelectorType ?? 'css') === 'css') {
+  if (allCompatible) {
     const schema = buildSchema(fields)
     if (schema) {
       const raw = rpHtml2Object(html ?? '', { items: rpLoop(itemSelector, schema) }) as {
@@ -263,8 +260,8 @@ export function extractListItems(
     }
   }
 
-  // 回退：XPath 容器或含 jsonPath 字段 → 内置提取器逐项解析
+  // 回退：含 jsonPath 字段 → 内置提取器逐项解析
   const doc = parseDocument(html ?? '')
-  const nodes: MatchedNode[] = doc.selectAll(itemSelector, itemSelectorType ?? 'css')
+  const nodes: MatchedNode[] = doc.selectAll(itemSelector)
   return nodes.map((node) => legacyExtractFields(node, fields).data)
 }

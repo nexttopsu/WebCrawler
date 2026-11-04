@@ -29,7 +29,7 @@ export const RequestErrorCode = {
   PROXY_ERROR: 'PROXY_ERROR',
   /** 浏览器启动、导航或截图失败 */
   BROWSER_ERROR: 'BROWSER_ERROR',
-  /** 当前版本不支持的能力（例如 SOCKS4） */
+  /** 当前版本不支持的能力（已下线的协议、未实现的特性） */
   UNSUPPORTED: 'UNSUPPORTED',
 } as const
 export type RequestErrorCode = (typeof RequestErrorCode)[keyof typeof RequestErrorCode]

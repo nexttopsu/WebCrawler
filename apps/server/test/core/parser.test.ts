@@ -9,7 +9,6 @@ import {
   getJsonPath,
   htmlToText,
   normalizeUrl,
-  parseDocument,
 } from '../../src/core/index.js'
 
 const listHtml = readFileSync(new URL('./fixtures/list.html', import.meta.url), 'utf8')
@@ -52,52 +51,6 @@ describe('CSS 解析', () => {
 
   it('非法 CSS 选择器抛出 ParserError', () => {
     expect(() => parser.count(listHtml, 'div[')).toThrow(ParserError)
-  })
-})
-
-describe('XPath 解析', () => {
-  it('支持绝对路径与属性断言', () => {
-    const doc = parseDocument(listHtml)
-    expect(doc.count('//div[@class="news-item"]', 'xpath')).toBe(4)
-    expect(doc.count('//a[@class="title"]/text()', 'xpath')).toBe(4)
-  })
-
-  it('支持属性轴', () => {
-    const doc = parseDocument(listHtml)
-    const nodes = doc.selectAll('//a[@class="title"]/@href', 'xpath')
-    expect(nodes.map((node) => node.attr('href'))).toEqual([
-      '/news/1.html',
-      '/news/2.html?utm_source=home&spm=abc',
-      '/news/3.html',
-      '/news/1.html',
-    ])
-  })
-
-  it('在 XPath 匹配到的节点内继续用 XPath 查询', () => {
-    const doc = parseDocument(listHtml)
-    const first = doc.selectFirst('//div[@class="news-item"]', 'xpath')
-    expect(first).not.toBeNull()
-    const title = first?.findAll('.//a[@class="title"]', 'xpath')[0]
-    expect(title?.text()).toBe('第一篇报道')
-  })
-
-  it('XPath 作用域内可以混用 CSS', () => {
-    const doc = parseDocument(listHtml)
-    const first = doc.selectFirst('//div[@class="news-item"]', 'xpath')
-    const time = first?.findAll('.time', 'css')[0]
-    expect(time?.text()).toBe('2026-01-01')
-  })
-
-  it('CSS 作用域内可以混用 XPath', () => {
-    const doc = parseDocument(listHtml)
-    const first = doc.selectFirst('.news-item')
-    const title = first?.findAll('.//a[@class="title"]', 'xpath')[0]
-    expect(title?.text()).toBe('第一篇报道')
-  })
-
-  it('非法 XPath 抛出 ParserError，而不是返回空数组', () => {
-    const doc = parseDocument(listHtml)
-    expect(() => doc.selectAll('//div[', 'xpath')).toThrow(ParserError)
   })
 })
 

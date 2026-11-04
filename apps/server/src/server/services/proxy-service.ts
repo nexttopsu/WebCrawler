@@ -60,7 +60,7 @@ export function toProxyDto(row: ProxyRow): ProxyDto {
   return {
     id: row.id,
     name: row.name?.trim() || `${row.protocol ?? 'http'}://${row.host ?? ''}:${row.port ?? 0}`,
-    type: (row.protocol === 'https' || row.protocol === 'socks5' ? row.protocol : 'http') as ProxyType,
+    type: (row.protocol === 'https' ? 'https' : 'http') as ProxyType,
     host: row.host ?? '',
     port: row.port ?? 0,
     username: row.username,

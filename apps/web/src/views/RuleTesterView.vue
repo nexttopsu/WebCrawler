@@ -49,21 +49,54 @@ const LIST_URL_HINT = 'https://example.com/news'
 const draft = ref<TesterDraft>(loadTesterDraft() ?? createEmptyDraft())
 const { hasUnsavedChanges, flush } = useTesterDraft(draft)
 
-/* ------------------------------ 解析器插件 ------------------------------ */
+/* ------------------------------ 插件选项 ------------------------------ */
 
-/** 解析器插件选项（type=parser 且已启用），用于详情提取后的数据重格式化 */
-const parserPluginOptions = ref<PluginDto[]>([])
+/** 全部已启用插件：列表插件、详情插件、解析器从同一份数据里按能力过滤 */
+const pluginOptions = ref<PluginDto[]>([])
 
-async function loadParserPlugins(): Promise<void> {
+async function loadPluginOptions(): Promise<void> {
   try {
-    const page = await listPlugins({ type: 'parser', enabled: 'true', pageSize: 100 })
-    parserPluginOptions.value = page.items
+    const page = await listPlugins({ enabled: 'true', pageSize: 100 })
+    pluginOptions.value = page.items
   } catch {
-    parserPluginOptions.value = []
+    pluginOptions.value = []
   }
 }
 
-void loadParserPlugins()
+/** 解析器插件（用于字段后处理链） */
+const parserPluginOptions = computed(() => pluginOptions.value.filter((item) => item.type === 'parser'))
+/** 只导出 parseList 的解析器不能挂到详情，反之亦然——选项按阶段过滤，避免选完才发现不支持 */
+const listParserPluginOptions = computed(() =>
+  parserPluginOptions.value.filter((item) => (item.slots ?? []).includes('list')),
+)
+const detailParserPluginOptions = computed(() =>
+  parserPluginOptions.value.filter((item) => (item.slots ?? []).includes('detail')),
+)
+/** 列表插件：type=flow 且导出了 getList */
+const listPluginOptions = computed(() =>
+  pluginOptions.value.filter((item) => item.type === 'flow' && (item.slots ?? []).includes('list')),
+)
+/** 详情插件：type=flow 且导出了 getDetail */
+const detailPluginOptions = computed(() =>
+  pluginOptions.value.filter((item) => item.type === 'flow' && (item.slots ?? []).includes('detail')),
+)
+
+/**
+ * 读取选择器绑定的字符串。
+ *
+ * Element Plus 的 `clearable` 单选被清空时给的是 `undefined`（`valueOnClear` 的默认值），
+ * 而草稿字段声明为 `string`——直接 `.trim()` 会抛 TypeError，把整棵渲染树带崩成白页。
+ * 所有来自选择器 / 本地草稿的字符串都从这里过一道。
+ */
+function trimmed(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/** 当前是否由列表 / 详情插件接管解析（接管后隐藏抽取规则与字段配置）。 */
+const hasListPlugin = computed(() => trimmed(draft.value.list.plugin).length > 0)
+const hasDetailPlugin = computed(() => trimmed(draft.value.detailPlugin).length > 0)
+
+void loadPluginOptions()
 
 onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload)
@@ -157,10 +190,15 @@ const listResult = ref<TesterListResultDto | null>(null)
 
 async function runListTest(): Promise<void> {
   const url = draft.value.url.trim()
-  const itemSelector = draft.value.list.itemSelector.trim()
-  if (!url || !itemSelector) return
+  const pluginId = trimmed(draft.value.list.plugin)
+  const itemSelector = trimmed(draft.value.list.itemSelector)
+  if (!url) return
+  if (!pluginId && !itemSelector) {
+    ElMessage.warning('请选择列表插件，或填写列表项选择器')
+    return
+  }
   const listFieldRules = listFieldsToRuleFields()
-  if (!listFieldRules.title || !listFieldRules.url) {
+  if (!pluginId && (!listFieldRules.title || !listFieldRules.url)) {
     ElMessage.warning('请先在「列表字段配置」中添加 title 和 url 字段（必填）')
     return
   }
@@ -170,16 +208,23 @@ async function runListTest(): Promise<void> {
       url,
       mode: draft.value.mode,
       ...(draft.value.proxyId ? { proxyId: draft.value.proxyId } : {}),
-      list: {
-        itemSelector,
-        fields: listFieldRules,
-        ...(draft.value.list.excludeSelectors.length > 0
-          ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
-          : {}),
-        ...(draft.value.list.parserPlugins.length > 0
-          ? { parserPlugins: [...draft.value.list.parserPlugins] }
-          : {}),
-      },
+      list: pluginId
+        ? {
+            plugin: pluginId,
+            ...(draft.value.list.excludeSelectors.length > 0
+              ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
+              : {}),
+          }
+        : {
+            itemSelector,
+            fields: listFieldRules,
+            ...(draft.value.list.excludeSelectors.length > 0
+              ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
+              : {}),
+            ...(draft.value.list.parserPlugins.length > 0
+              ? { parserPlugins: [...draft.value.list.parserPlugins] }
+              : {}),
+          },
       ...(draft.value.list.paginationType !== 'none' ? { pagination: buildPagination() } : {}),
     })
     listResult.value = result
@@ -250,14 +295,20 @@ async function loadDetailSnapshot(): Promise<void> {
 
 const enabledFieldCount = computed(() => draft.value.fields.filter((field) => field.enabled).length)
 
+/** 详情页签标题：插件接管时不再显示字段数量。 */
+const detailTabLabel = computed(() =>
+  hasDetailPlugin.value ? '详情规则（插件）' : `详情规则（${enabledFieldCount.value}）`,
+)
+
 async function runDetailTest(): Promise<void> {
   const url = detailUrl.value.trim() || draft.value.url.trim()
   if (!url) {
     ElMessage.warning('请输入详情页地址（或从列表结果中选择一篇）')
     return
   }
-  if (enabledFieldCount.value === 0) {
-    ElMessage.warning('至少启用一个字段')
+  const pluginId = trimmed(draft.value.detailPlugin)
+  if (!pluginId && enabledFieldCount.value === 0) {
+    ElMessage.warning('请选择详情插件，或至少启用一个字段')
     return
   }
   detailTesting.value = true
@@ -268,11 +319,15 @@ async function runDetailTest(): Promise<void> {
       url,
       mode: draft.value.mode,
       ...(draft.value.proxyId ? { proxyId: draft.value.proxyId } : {}),
-      fields: fieldsToRuleFields(),
+      ...(pluginId
+        ? { plugin: pluginId }
+        : {
+            fields: fieldsToRuleFields(),
+            ...(draft.value.parserPlugins.length > 0 ? { parserPlugins: [...draft.value.parserPlugins] } : {}),
+          }),
       ...(draft.value.excludeSelectors.length > 0
         ? { excludeSelectors: [...draft.value.excludeSelectors] }
         : {}),
-      ...(draft.value.parserPlugins.length > 0 ? { parserPlugins: [...draft.value.parserPlugins] } : {}),
     })
     detailResult.value = result
     setTabResult(result, '详情测试')
@@ -319,8 +374,10 @@ function listFieldsToRuleFields(): Record<string, FieldRule> {
 
 const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   const fields = fieldsToRuleFields()
-  const hasList = draft.value.list.itemSelector.trim().length > 0
-  if (!hasList && Object.keys(fields).length === 0) return null
+  const listPlugin = trimmed(draft.value.list.plugin)
+  const detailPlugin = trimmed(draft.value.detailPlugin)
+  const hasList = listPlugin.length > 0 || trimmed(draft.value.list.itemSelector).length > 0
+  if (!hasList && Object.keys(fields).length === 0 && !detailPlugin) return null
 
   const config: CrawlRuleConfig = {
     version: 1,
@@ -328,27 +385,37 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   }
   if (hasList) {
     const listFieldRules = listFieldsToRuleFields()
-    config.list = {
-      itemSelector: draft.value.list.itemSelector.trim(),
-      ...(Object.keys(listFieldRules).length > 0 ? { fields: listFieldRules } : {}),
-      ...(draft.value.list.excludeSelectors.length > 0
-        ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
-        : {}),
-      ...(draft.value.list.parserPlugins.length > 0
-        ? { parserPlugins: [...draft.value.list.parserPlugins] }
-        : {}),
-    }
+    config.list = listPlugin
+      ? {
+          plugin: listPlugin,
+          ...(draft.value.list.excludeSelectors.length > 0
+            ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
+            : {}),
+        }
+      : {
+          itemSelector: trimmed(draft.value.list.itemSelector),
+          ...(Object.keys(listFieldRules).length > 0 ? { fields: listFieldRules } : {}),
+          ...(draft.value.list.excludeSelectors.length > 0
+            ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
+            : {}),
+          ...(draft.value.list.parserPlugins.length > 0
+            ? { parserPlugins: [...draft.value.list.parserPlugins] }
+            : {}),
+        }
     if (draft.value.list.paginationType !== 'none') {
       config.pagination = buildPagination()
     }
   }
-  if (Object.keys(fields).length > 0) {
+  if (detailPlugin) {
+    // 详情插件接管解析，不再写字段映射
+    config.detail = { plugin: detailPlugin }
+  } else if (Object.keys(fields).length > 0) {
     config.fields = fields
   }
-  if (draft.value.excludeSelectors.length > 0) {
+  if (!detailPlugin && draft.value.excludeSelectors.length > 0) {
     config.excludeSelectors = [...draft.value.excludeSelectors]
   }
-  if (draft.value.parserPlugins.length > 0) {
+  if (!detailPlugin && draft.value.parserPlugins.length > 0) {
     config.parserPlugins = [...draft.value.parserPlugins]
   }
   return config
@@ -356,6 +423,8 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
 
 function onImported(config: CrawlRuleConfig): void {
   draft.value.url = draft.value.url // 保持当前地址
+  draft.value.list.plugin = config.list?.plugin ?? ''
+  draft.value.detailPlugin = config.detail?.plugin ?? ''
   draft.value.list.itemSelector = config.list?.itemSelector ?? ''
   const importedListFields = Object.entries(config.list?.fields ?? {})
   if (importedListFields.length === 0 && (config.list?.linkSelector || config.list?.titleSelector)) {
@@ -502,6 +571,28 @@ const requestInfo = computed(() => {
         <el-tabs v-model="middleTab" class="middle-tabs">
           <el-tab-pane label="列表规则" name="list">
             <div class="plugin-row">
+              <span class="plugin-row__label">列表插件</span>
+              <el-select
+                v-model="draft.list.plugin"
+                filterable
+                clearable
+                value-on-clear=""
+                size="small"
+                placeholder="不使用插件（改用抽取规则）"
+                class="plugin-row__select"
+              >
+                <el-option
+                  v-for="plugin in listPluginOptions"
+                  :key="plugin.pluginId"
+                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                  :value="plugin.pluginId"
+                />
+              </el-select>
+              <span class="binding-hint">
+                全流程插件：传入分页后的完整地址，直接返回文章列表；选中后无需抽取规则
+              </span>
+            </div>
+            <div v-if="!hasListPlugin" class="plugin-row">
               <span class="plugin-row__label">解析器插件（列表）</span>
               <el-select
                 v-model="draft.list.parserPlugins"
@@ -514,15 +605,15 @@ const requestInfo = computed(() => {
                 class="plugin-row__select"
               >
                 <el-option
-                  v-for="plugin in parserPluginOptions"
-                  :key="plugin.name"
+                  v-for="plugin in listParserPluginOptions"
+                  :key="plugin.pluginId"
                   :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-                  :value="plugin.name"
+                  :value="plugin.pluginId"
                 />
               </el-select>
               <span class="binding-hint">仅对列表字段提取后生效，与详情互不影响</span>
             </div>
-            <div class="plugin-row">
+            <div v-if="!hasListPlugin" class="plugin-row">
               <span class="plugin-row__label">排除选择器（列表）</span>
               <el-input
                 v-model="listExcludeInput"
@@ -539,6 +630,7 @@ const requestInfo = computed(() => {
               v-model:pagination-parameter="draft.list.paginationParameter"
               v-model:pagination-path-pattern="draft.list.paginationPathPattern"
               v-model:max-pages="draft.list.maxPages"
+              :plugin-mode="hasListPlugin"
               :testing="listTesting"
               :result="listResult"
               :detail-url="detailUrl"
@@ -546,6 +638,7 @@ const requestInfo = computed(() => {
               @pick-detail="pickDetail"
             />
             <FieldConfigPanel
+              v-if="!hasListPlugin"
               v-model:fields="draft.list.listFields"
               class="list-fields-panel"
               title="列表字段配置"
@@ -555,8 +648,30 @@ const requestInfo = computed(() => {
             />
           </el-tab-pane>
 
-          <el-tab-pane :label="`详情规则（${enabledFieldCount}）`" name="detail">
+          <el-tab-pane :label="detailTabLabel" name="detail">
             <div class="plugin-row">
+              <span class="plugin-row__label">详情插件</span>
+              <el-select
+                v-model="draft.detailPlugin"
+                filterable
+                clearable
+                value-on-clear=""
+                size="small"
+                placeholder="不使用插件（改用字段规则）"
+                class="plugin-row__select"
+              >
+                <el-option
+                  v-for="plugin in detailPluginOptions"
+                  :key="plugin.pluginId"
+                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                  :value="plugin.pluginId"
+                />
+              </el-select>
+              <span class="binding-hint">
+                全流程插件：传入详情页地址，直接返回文章数据对象；选中后无需字段配置
+              </span>
+            </div>
+            <div v-if="!hasDetailPlugin" class="plugin-row">
               <span class="plugin-row__label">解析器插件（详情）</span>
               <el-select
                 v-model="draft.parserPlugins"
@@ -569,15 +684,15 @@ const requestInfo = computed(() => {
                 class="plugin-row__select"
               >
                 <el-option
-                  v-for="plugin in parserPluginOptions"
-                  :key="plugin.name"
+                  v-for="plugin in detailParserPluginOptions"
+                  :key="plugin.pluginId"
                   :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-                  :value="plugin.name"
+                  :value="plugin.pluginId"
                 />
               </el-select>
               <span class="binding-hint">仅对详情字段提取后生效，与列表互不影响</span>
             </div>
-            <div class="plugin-row">
+            <div v-if="!hasDetailPlugin" class="plugin-row">
               <span class="plugin-row__label">排除选择器（详情）</span>
               <el-input
                 v-model="detailExcludeInput"
@@ -601,6 +716,7 @@ const requestInfo = computed(() => {
               </el-button>
             </div>
             <FieldConfigPanel
+              v-if="!hasDetailPlugin"
               v-model:fields="draft.fields"
               title="字段配置"
               subtitle="与列表规则共用同一套内置字段；保存后可直接被采集引擎执行"
@@ -611,6 +727,7 @@ const requestInfo = computed(() => {
               :result="detailResult"
               :testing="detailTesting"
               :has-fields="enabledFieldCount > 0"
+              :plugin-mode="hasDetailPlugin"
               @test="runDetailTest"
             />
           </el-tab-pane>

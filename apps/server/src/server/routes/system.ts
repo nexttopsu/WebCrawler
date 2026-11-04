@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { CORE_PACKAGE } from '../../core/index.js'
 import { DATABASE_PACKAGE, getDatabaseContext } from '../../database/index.js'
-import { PLUGINS_PACKAGE, type PluginManifest, type PluginRegistry } from '../../plugin-system/index.js'
+import { PLUGINS_PACKAGE, pluginSlots, type PluginRegistry } from '../../plugin-system/index.js'
 import { REQUEST_PACKAGE } from '../../request/index.js'
 import { SHARED_PACKAGE, type PackageInfo } from '../../shared/index.js'
 import { jsonOk } from '../lib/response.js'
@@ -38,7 +38,14 @@ export interface SystemInfoPayload {
   packages: PackageInfo[]
   plugins: {
     registered: number
-    items: PluginManifest[]
+    items: Array<{
+      id: string
+      name: string
+      type: string
+      slots: Array<'list' | 'detail'>
+      version: string | null
+      source: string
+    }>
   }
   verbose?: {
     memory: Record<string, number>
@@ -91,7 +98,14 @@ export function systemRoutes(config: AppConfig, registry: PluginRegistry): ApiRo
           packages: WORKSPACE_PACKAGES,
           plugins: {
             registered: registry.size,
-            items: registry.list(),
+            items: registry.list().map((plugin) => ({
+              id: plugin.config.id,
+              name: plugin.config.name,
+              type: plugin.config.type,
+              slots: pluginSlots(plugin),
+              version: plugin.config.version ?? null,
+              source: plugin.source,
+            })),
           },
         }
 

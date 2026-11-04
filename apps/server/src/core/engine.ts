@@ -26,12 +26,30 @@ export interface CrawlServices {
  * 解析器插件执行器：按规则 `parserPlugins` 顺序对提取结果做重格式化。
  * 由应用层实现（从插件注册表解析插件链），引擎只负责在正确时机调用。
  * `stage` 标记执行阶段：list = 列表字段提取后，detail = 详情字段提取后。
+ * `fetchPage` 供插件按需补抓页面（与引擎同一条代理 / 浏览器路径）。
  */
 export type ParserPluginRunner = (
   data: Record<string, unknown>,
   context: CrawlContext,
-  source: { html: string; url: string; stage: 'list' | 'detail' },
+  source: { html: string; url: string; stage: 'list' | 'detail'; fetchPage?: PluginFetchPage },
 ) => Promise<Record<string, unknown>>
+
+/**
+ * 全流程插件执行器。
+ *
+ * - `slot=list`：入参是分页后的完整地址，返回该页的条目数组；
+ * - `slot=detail`：入参是文章地址，返回一篇文章的字段对象。
+ *
+ * 返回结构由执行器侧校验（数组 / 对象），引擎只负责把结果映射成链接或文章。
+ */
+export type FlowPluginRunner = (input: {
+  pluginId: string
+  slot: 'list' | 'detail'
+  url: string
+  context: CrawlContext
+  /** 插件上下文里的 `ctx.fetchPage`：由引擎注入，保证浏览器模式与代理对插件同样生效 */
+  fetchPage?: PluginFetchPage
+}) => Promise<unknown>
 
 /** 创建引擎的配置。 */
 export interface CrawlEngineOptions {
@@ -40,6 +58,8 @@ export interface CrawlEngineOptions {
   browser?: BrowserClient | null
   /** 解析器插件执行器；规则未配置 parserPlugins 时不会被调用 */
   parserPluginRunner?: ParserPluginRunner
+  /** 全流程插件执行器；规则未配置 list.plugin / detail.plugin 时不会被调用 */
+  flowPluginRunner?: FlowPluginRunner
 }
 
 /** 一次页面抓取的结果。 */
@@ -49,6 +69,29 @@ export interface FetchedPage {
   status: number
   mode: RequestMode
   elapsedMs: number
+}
+
+/** 给插件用的抓取结果：不暴露 mode / elapsedMs，避免插件依赖内部字段。 */
+export interface FetchedPageView {
+  html: string
+  finalUrl: string
+  status: number
+}
+
+/** 插件可用的抓取能力（`ctx.fetchPage`）。 */
+export type PluginFetchPage = (url: string) => Promise<FetchedPageView>
+
+/**
+ * 解析一次运行使用的请求模式。
+ *
+ * 顺序：调用方显式指定（测试器传的 mode）> 规则里的 request.mode > 规则的 browser.enabled > HTTP。
+ * 抽成纯函数，是为了让插件上下文和引擎拿到同一个结论，不要各算一套。
+ */
+export function resolveRequestMode(context: CrawlContext): RequestMode {
+  if (context.requestOptions.mode) return context.requestOptions.mode
+  if (context.rule.config.request?.mode) return context.rule.config.request.mode
+  if (context.rule.config.browser?.enabled) return 'browser'
+  return 'http'
 }
 
 /** 列表页解析结果：链接 + 列表项命中数量 + 页面元信息。 */
@@ -104,10 +147,18 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** 插件返回值里的文本字段：只接受字符串与数字，其它一律视为空。 */
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
+}
+
 /** 采集引擎。 */
 export class CrawlEngine {
   readonly services: CrawlServices
   private readonly parserPluginRunner: ParserPluginRunner | null
+  private readonly flowPluginRunner: FlowPluginRunner | null
 
   constructor(options: CrawlEngineOptions) {
     this.services = {
@@ -116,14 +167,25 @@ export class CrawlEngine {
       browser: options.browser ?? null,
     }
     this.parserPluginRunner = options.parserPluginRunner ?? null
+    this.flowPluginRunner = options.flowPluginRunner ?? null
   }
 
   /** 解析本次请求使用的模式。 */
   resolveMode(context: CrawlContext): RequestMode {
-    if (context.requestOptions.mode) return context.requestOptions.mode
-    if (context.rule.config.request?.mode) return context.rule.config.request.mode
-    if (context.rule.config.browser?.enabled) return 'browser'
-    return 'http'
+    return resolveRequestMode(context)
+  }
+
+  /**
+   * 提供给插件的抓取能力。
+   *
+   * 走的是引擎自己的 `fetchPage`，所以 browser 模式、代理、SSRF、超时全部一致——
+   * 插件不需要（也不允许）自己 launch 浏览器。
+   */
+  private pluginFetchPage(context: CrawlContext): PluginFetchPage {
+    return async (url) => {
+      const page = await this.fetchPage(context, url)
+      return { html: page.html, finalUrl: page.finalUrl, status: page.status }
+    }
   }
 
   /** 抓取页面：按规则决定走 HTTP 还是浏览器渲染。 */
@@ -206,6 +268,9 @@ export class CrawlEngine {
    */
   async listPage(context: CrawlContext): Promise<ListPageResult> {
     const listRule = context.rule.config.list
+    if (listRule?.plugin) {
+      return this.listPageWithPlugin(listRule, context)
+    }
     if (!listRule?.itemSelector) {
       throw new ParserError(
         'INVALID_FIELD_RULE',
@@ -227,14 +292,14 @@ export class CrawlEngine {
 
     const doc = this.services.parser.parseHtml(html)
 
-    const items = doc.selectAll(listRule.itemSelector, listRule.itemSelectorType ?? 'css')
+    const items = doc.selectAll(listRule.itemSelector)
     const links: ArticleLink[] = []
     const seen = new Set<string>()
     let duplicateCount = 0
 
     for (const item of items) {
       const linkSelector = listRule.linkSelector ?? 'a'
-      const linkNodes = linkSelector ? item.findAll(linkSelector, listRule.itemSelectorType ?? 'css') : [item]
+      const linkNodes = linkSelector ? item.findAll(linkSelector) : [item]
       const linkNode = linkNodes[0]
       if (!linkNode) continue
 
@@ -253,7 +318,7 @@ export class CrawlEngine {
       seen.add(absolute)
 
       const titleNode = listRule.titleSelector
-        ? item.findAll(listRule.titleSelector, listRule.itemSelectorType ?? 'css')[0]
+        ? item.findAll(listRule.titleSelector)[0]
         : linkNode
       const title = parser.cleanText(titleNode?.text() ?? '')
 
@@ -262,7 +327,7 @@ export class CrawlEngine {
 
       // 封面图：列表阶段提取（详情页没有封面时的兜底来源）
       if (listRule.coverSelector) {
-        const coverNode = item.findAll(listRule.coverSelector, listRule.itemSelectorType ?? 'css')[0]
+        const coverNode = item.findAll(listRule.coverSelector)[0]
         const rawCover = coverNode?.attr(listRule.coverAttribute ?? 'src')?.trim()
         if (rawCover) {
           const coverAbsolute = parser.normalizeUrl(resolveUrl(rawCover, base))
@@ -285,6 +350,98 @@ export class CrawlEngine {
   }
 
   /**
+   * 列表插件路径：插件拿到分页后的完整地址，返回这一页的条目。
+   *
+   * 平台只做三件事：把相对地址补成绝对地址、丢弃重复/非法条目、
+   * 把作者 / 摘要 / 正文 / 封面 / 文章时间等内置字段挂到链接上。
+   */
+  private async listPageWithPlugin(listRule: ListRuleConfig, context: CrawlContext): Promise<ListPageResult> {
+    const pluginId = listRule.plugin ?? ''
+    if (!this.flowPluginRunner) {
+      throw new ParserError('INVALID_FIELD_RULE', `规则使用了列表插件 "${pluginId}"，但当前运行环境没有加载插件`)
+    }
+
+    const url = listRule.url ?? context.category.listUrl ?? context.url
+    const startedAt = performance.now()
+    const raw = await this.flowPluginRunner({ pluginId, slot: 'list', url, context, fetchPage: this.pluginFetchPage(context) })
+    if (!Array.isArray(raw)) {
+      throw new ParserError(
+        'INVALID_FIELD_RULE',
+        `列表插件 "${pluginId}" 必须返回数组，每项至少包含 url（实际返回 ${typeof raw}）`,
+      )
+    }
+
+    const parser = this.services.parser
+    const links: ArticleLink[] = []
+    const seen = new Set<string>()
+    let duplicateCount = 0
+
+    for (const item of raw) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        duplicateCount += 1
+        continue
+      }
+      const record = item as Record<string, unknown>
+      const rawUrl = asText(record.url)
+      if (!rawUrl) {
+        duplicateCount += 1
+        continue
+      }
+
+      let absolute = ''
+      try {
+        absolute = parser.normalizeUrl(resolveUrl(rawUrl, url))
+      } catch {
+        absolute = ''
+      }
+      if (!/^https?:\/\//i.test(absolute) || seen.has(absolute)) {
+        duplicateCount += 1
+        continue
+      }
+      seen.add(absolute)
+
+      const link: ArticleLink = { url: absolute, sourceUrl: url }
+      const title = asText(record.title)
+      if (title) link.title = title
+      const author = asText(record.author)
+      if (author) link.author = author
+      const summary = asText(record.summary)
+      if (summary) link.summary = summary
+      const content = asText(record.content)
+      if (content) link.content = content
+      const articleTime = asText(record.articleTime)
+      if (articleTime) link.articleTime = articleTime
+
+      const coverRaw = asText(record.coverUrl)
+      if (coverRaw) {
+        try {
+          const cover = parser.normalizeUrl(resolveUrl(coverRaw, url))
+          if (/^https?:\/\//i.test(cover)) link.coverUrl = cover
+        } catch {
+          // 封面地址非法时忽略，不影响条目入库
+        }
+      }
+
+      if (record.extra && typeof record.extra === 'object' && !Array.isArray(record.extra)) {
+        link.metadata = { ...(record.extra as Record<string, unknown>) }
+      }
+
+      links.push(link)
+    }
+
+    return {
+      links,
+      itemCount: raw.length,
+      duplicateCount,
+      finalUrl: url,
+      // 插件自己发请求，状态码不在平台侧，0 表示「由插件决定」
+      status: 0,
+      mode: this.resolveMode(context),
+      elapsedMs: Math.round(performance.now() - startedAt),
+    }
+  }
+
+  /**
    * 字段配置路径的列表提取：title / url 必填，其余字段进 metadata。
    *
    * 规则配置了 `parserPlugins` 时，每个列表项在提取完成后都会过一遍插件链
@@ -300,7 +457,8 @@ export class CrawlEngine {
   ): Promise<ListPageResult> {
     const fields = listRule.fields ?? {}
     // html 已由调用方应用排除选择器（提取前删除混淆节点）
-    const items = extractListItems(html, listRule.itemSelector, listRule.itemSelectorType, fields)
+    // 调用方已保证有 itemSelector（缺了会在 listPage 直接报错）
+    const items = extractListItems(html, listRule.itemSelector ?? '', fields)
     const parser = this.services.parser
 
     // 列表阶段只用 list.parserPlugins（与详情阶段的顶层 parserPlugins 互不影响）
@@ -319,6 +477,7 @@ export class CrawlEngine {
             html: page.html,
             url: page.finalUrl,
             stage: 'list',
+            fetchPage: this.pluginFetchPage(context),
           })
         } catch (error) {
           context.logger.warn(
@@ -426,6 +585,11 @@ export class CrawlEngine {
     context: CrawlContext,
     link: ArticleLink,
   ): Promise<{ result: PipelineResult; page: FetchedPage }> {
+    const detailPlugin = context.rule.config.detail?.plugin
+    if (detailPlugin) {
+      return this.fetchAndParseWithPlugin(context, link, detailPlugin)
+    }
+
     const page = await this.fetchPage(context, link.url)
     const fields: Record<string, FieldRule> = context.rule.config.detail?.fields ?? context.rule.config.fields ?? {}
     if (Object.keys(fields).length === 0) {
@@ -444,6 +608,7 @@ export class CrawlEngine {
               html: page.html,
               url: page.finalUrl,
               stage: 'detail',
+              fetchPage: this.pluginFetchPage(context),
             })
         : undefined
 
@@ -467,6 +632,106 @@ export class CrawlEngine {
       this.services.parser,
     )
     return { result, page }
+  }
+
+  /**
+   * 详情插件路径：插件自己抓取并解析页面，返回文章字段。
+   *
+   * 平台不再跑规则抽取，但仍做两件事：标题非空校验、URL 与封面地址归一化。
+   * 返回的 `page.html` 为空串——插件不把原始 HTML 交给平台，原始数据页签会显示为空。
+   */
+  private async fetchAndParseWithPlugin(
+    context: CrawlContext,
+    link: ArticleLink,
+    pluginId: string,
+  ): Promise<{ result: PipelineResult; page: FetchedPage }> {
+    if (!this.flowPluginRunner) {
+      throw new ParserError('INVALID_FIELD_RULE', `规则使用了详情插件 "${pluginId}"，但当前运行环境没有加载插件`)
+    }
+
+    const startedAt = performance.now()
+    const raw = await this.flowPluginRunner({ pluginId, slot: 'detail', url: link.url, context, fetchPage: this.pluginFetchPage(context) })
+    const elapsedMs = Math.round(performance.now() - startedAt)
+
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new ParserError(
+        'INVALID_FIELD_RULE',
+        `详情插件 "${pluginId}" 必须返回字段对象（实际返回 ${Array.isArray(raw) ? 'array' : typeof raw}）`,
+      )
+    }
+
+    const article = this.articleFromPlugin(raw as Record<string, unknown>, link, context)
+    const errors = article ? [] : ['缺少标题']
+
+    return {
+      result: {
+        article,
+        fields: {},
+        missing: [],
+        errors,
+        steps: [
+          {
+            stage: 'output',
+            ok: article !== null,
+            durationMs: elapsedMs,
+            detail: article ? `详情插件 ${pluginId}` : `详情插件 ${pluginId} 未返回标题`,
+          },
+        ],
+      },
+      page: {
+        html: '',
+        finalUrl: link.url,
+        status: 0,
+        mode: this.resolveMode(context),
+        elapsedMs,
+      },
+    }
+  }
+
+  /** 详情插件返回值 → ArticleData；标题为空时返回 null（与管道的校验一致）。 */
+  private articleFromPlugin(
+    record: Record<string, unknown>,
+    link: ArticleLink,
+    context: CrawlContext,
+  ): ArticleData | null {
+    const title = asText(record.title)
+    if (!title) return null
+
+    // 地址始终用列表链接：插件返回的规范地址只作参考，覆盖会让同 URL 去重失效
+    const article: ArticleData = {
+      siteId: context.site.id,
+      categoryId: context.category.id,
+      title,
+      url: link.url,
+    }
+
+    const author = asText(record.author)
+    if (author) article.author = author
+    const summary = asText(record.summary)
+    if (summary) article.summary = summary
+    const content = asText(record.content)
+    if (content) article.content = content
+    const articleTime = asText(record.articleTime)
+    if (articleTime) article.articleTime = articleTime
+
+    const coverRaw = asText(record.coverUrl)
+    if (coverRaw) {
+      try {
+        const cover = this.services.parser.normalizeUrl(resolveUrl(coverRaw, link.url))
+        if (/^https?:\/\//i.test(cover)) article.coverUrl = cover
+      } catch {
+        // 封面地址非法时留空
+      }
+    }
+
+    const metadata: Record<string, unknown> = { sourceUrl: link.sourceUrl }
+    if (link.title) metadata.listTitle = link.title
+    if (record.extra && typeof record.extra === 'object' && !Array.isArray(record.extra)) {
+      Object.assign(metadata, record.extra as Record<string, unknown>)
+    }
+    article.metadata = metadata
+
+    return article
   }
 
   /** 采集一个栏目：列表 → 逐篇详情。 */

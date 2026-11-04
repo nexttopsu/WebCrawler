@@ -3,13 +3,23 @@ import {
   AbortedError,
   buildPageUrls,
   CrawlEngine,
+  createParser,
   delay,
   IntervalLimiter,
   PaginationError,
+  resolveRequestMode,
+  type FlowPluginRunner,
   type ParserPluginRunner,
+  type PluginFetchPage,
 } from '../../core/index.js'
-import { createBrowserClient, RequestError, type BrowserClient, type RequestClient } from '../../request/index.js'
-import type { PluginRegistry } from '../../plugin-system/index.js'
+import {
+  createBrowserClient,
+  createScopedRequest,
+  RequestError,
+  type BrowserClient,
+  type RequestClient,
+} from '../../request/index.js'
+import { describePlugin, type PluginContext, type PluginRegistry } from '../../plugin-system/index.js'
 import {
   CrawlTaskStatus,
   CrawlTaskType,
@@ -105,28 +115,114 @@ function hostnameOf(url: string): string {
   }
 }
 
+/**
+ * 插件上下文：请求器、抓取能力与解析器由调用方注入，日志写进任务日志。
+ *
+ * `request` 不是平台单例，而是「绑定本次代理」的视图：测试器里选的代理、
+ * 栏目配置的代理，对插件内部发出的请求同样生效。显式传 `{ proxy: null }`
+ * 可以让单次请求直连。
+ */
+function buildPluginContext(
+  context: CrawlContext,
+  services: {
+    request: RequestClient
+    parser: ReturnType<typeof createParser>
+    fetchPage?: PluginFetchPage
+  },
+): PluginContext {
+  const proxy = context.proxy ?? null
+  return {
+    request: createScopedRequest(services.request, proxy),
+    // 没有引擎注入时（例如单独测 runner）给出明确错误，而不是静默走 HTTP
+    fetchPage:
+      services.fetchPage ??
+      (async () => {
+        throw new Error('当前运行环境没有提供 fetchPage，请改用 ctx.request 或检查引擎注入')
+      }),
+    proxy,
+    mode: resolveRequestMode(context),
+    parser: services.parser,
+    logger: {
+      info: (message: string) => context.logger.info(message),
+      warn: (message: string) => context.logger.warn(message),
+      error: (message: string) => context.logger.error(message),
+    },
+    siteId: context.site.id,
+    categoryId: context.category.id,
+  }
+}
+
 /** 规则里配置的 parserPlugins → 依次执行的插件链运行器（列表与详情阶段共用）。 */
-export function createParserPluginRunner(registry: PluginRegistry): ParserPluginRunner {
+export function createParserPluginRunner(
+  registry: PluginRegistry,
+  request: RequestClient,
+  parser: ReturnType<typeof createParser> = createParser(),
+): ParserPluginRunner {
   return async (data, context, source) => {
     // 名单按阶段取：列表用 list.parserPlugins，详情用顶层 parserPlugins，互不影响
-    const names =
+    const ids =
       source.stage === 'list'
         ? (context.rule.config.list?.parserPlugins ?? [])
         : (context.rule.config.parserPlugins ?? [])
     let current = data
-    for (const name of names) {
-      const plugin = registry.getParserPlugin(name)
+    for (const id of ids) {
+      const plugin = registry.getParser(id, source.stage)
       if (!plugin) {
-        throw new Error(`解析器插件 "${name}" 未加载或不是 parser 类型，请检查插件管理页`)
+        const other = registry.get(id)
+        const expected = source.stage === 'list' ? 'parseList' : 'parseDetail'
+        if (other) {
+          throw new Error(`插件 "${id}" 是${describePlugin(other)}，没有导出 ${expected}，不能用于该阶段`)
+        }
+        throw new Error(`插件 "${id}" 不是已启用的解析器插件，请检查插件管理页`)
       }
-      current = await plugin.transform({
-        data: current,
-        html: source.html,
-        url: source.url,
-        stage: source.stage,
-      })
+      const handler = source.stage === 'list' ? plugin.parseList! : plugin.parseDetail!
+      const output = await handler(
+        source.url,
+        current,
+        buildPluginContext(context, {
+          request,
+          parser,
+          ...(source.fetchPage ? { fetchPage: source.fetchPage } : {}),
+        }),
+      )
+      if (!output || typeof output !== 'object' || Array.isArray(output)) {
+        throw new Error(`解析器插件 "${id}" 必须返回字段对象`)
+      }
+      current = output as Record<string, unknown>
     }
     return current
+  }
+}
+
+/**
+ * 全流程插件运行器。
+ *
+ * 列表阶段调 `getList`，详情阶段调 `getDetail`；插件没实现对应函数时直接报错，
+ * 避免“挂上了但结果为空”。一个插件可以同时实现两个函数。
+ */
+export function createFlowPluginRunner(
+  registry: PluginRegistry,
+  request: RequestClient,
+  parser: ReturnType<typeof createParser> = createParser(),
+): FlowPluginRunner {
+  return async ({ pluginId, slot, url, context, fetchPage }) => {
+    const plugin = registry.getFlow(pluginId, slot)
+    if (!plugin) {
+      const other = registry.get(pluginId)
+      const expected = slot === 'list' ? 'getList' : 'getDetail'
+      if (other) {
+        throw new Error(`插件 "${pluginId}" 是${describePlugin(other)}，没有导出 ${expected}，不能用于该阶段`)
+      }
+      throw new Error(`插件 "${pluginId}" 未启用或不存在，请检查插件管理页`)
+    }
+
+    const ctx = buildPluginContext(context, {
+      request,
+      parser,
+      ...(fetchPage ? { fetchPage } : {}),
+    })
+    if (slot === 'list') return plugin.getList!(url, ctx)
+    return plugin.getDetail!(url, ctx)
   }
 }
 
@@ -204,7 +300,10 @@ export class TaskExecutor {
       request: this.deps.request,
       browser,
       parserPluginRunner: this.deps.pluginRegistry
-        ? createParserPluginRunner(this.deps.pluginRegistry)
+        ? createParserPluginRunner(this.deps.pluginRegistry, this.deps.request)
+        : undefined,
+      flowPluginRunner: this.deps.pluginRegistry
+        ? createFlowPluginRunner(this.deps.pluginRegistry, this.deps.request)
         : undefined,
     })
     const errors: string[] = []

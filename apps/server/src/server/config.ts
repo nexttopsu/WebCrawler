@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 
 export const APP_NAME = 'WebCrawler'
-export const APP_VERSION = '0.6.0'
+export const APP_VERSION = '0.7.0'
 
 export type AppEnv = 'development' | 'production' | 'test'
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -41,8 +41,6 @@ export interface AppConfig {
   schedulerEnabled: boolean
   /** 代理连通性测试的默认目标地址 */
   proxyTestUrl: string
-  /** 本地插件目录（扫描 plugin.json 清单） */
-  pluginDir: string
 }
 
 const DEFAULT_PORT = 3000
@@ -116,6 +114,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     taskRateLimitMs: parsePositiveInt(env.TASK_RATE_LIMIT_MS, 'TASK_RATE_LIMIT_MS', 300, 60_000),
     schedulerEnabled: parseBoolean(env.SCHEDULER_ENABLED ?? 'true'),
     proxyTestUrl: env.PROXY_TEST_URL?.trim() || 'https://www.example.com',
-    pluginDir: env.PLUGIN_DIR?.trim() || resolve(process.cwd(), 'plugins'),
   }
 }

@@ -106,10 +106,10 @@ describe('规则 Schema', () => {
     expect(text).toContain('换行符')
   })
 
-  it('代理只支持 http / https / socks5', () => {
+  it('代理只支持 http / https', () => {
     const text = errorText({
       version: 1,
-      request: { proxy: { protocol: 'socks4', host: '127.0.0.1', port: 1080 } },
+      request: { proxy: { protocol: 'socks5', host: '127.0.0.1', port: 1080 } },
     })
     expect(text).toContain('代理协议')
   })
@@ -195,5 +195,43 @@ describe('默认规则', () => {
   it('默认配置本身是合法的', () => {
     const result = parseRuleConfig(createDefaultRuleConfig())
     expect(result.success).toBe(true)
+  })
+})
+
+describe('规则 Schema：全流程插件', () => {
+  it('列表只配插件、不写抽取规则也能通过（分页仍可配置）', () => {
+    const result = parseRuleConfig({
+      version: 1,
+      list: { plugin: 'example-flow-news', pagination: { type: 'query', parameter: 'page' } },
+      detail: { plugin: 'example-flow-news' },
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.config.list?.plugin).toBe('example-flow-news')
+    expect(result.config.list?.pagination?.type).toBe('query')
+    expect(result.config.detail?.plugin).toBe('example-flow-news')
+  })
+
+  it('没有插件时必须提供 itemSelector', () => {
+    const text = errorText({ version: 1, list: { linkSelector: 'a' } })
+    expect(text).toContain('itemSelector')
+  })
+
+  it('列表插件与 linkSelector / titleSelector 互斥', () => {
+    expect(errorText({ version: 1, list: { plugin: 'p', linkSelector: 'a' } })).toContain('不能同时使用')
+    expect(errorText({ version: 1, list: { plugin: 'p', titleSelector: '.t' } })).toContain('不能同时使用')
+  })
+
+  it('详情插件与字段映射互斥', () => {
+    const text = errorText({
+      version: 1,
+      list: { itemSelector: '.item' },
+      detail: { plugin: 'p', fields: { title: { type: 'text', selector: 'h1' } } },
+    })
+    expect(text).toContain('二选一')
+  })
+
+  it('插件 id 不合法时报错', () => {
+    expect(errorText({ version: 1, list: { plugin: '插件 名' } })).toContain('插件 id 不合法')
   })
 })

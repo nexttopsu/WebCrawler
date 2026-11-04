@@ -207,6 +207,24 @@ export function toProxySummary(row: ProxyRow): ProxySummaryDto {
 }
 
 /** 解析数据库中存储的规则 JSON。 */
+/**
+ * 剥掉已从规则契约中移除的字段。
+ *
+ * `selectorType` / `itemSelectorType` 是 XPath 时代的字段，删除 XPath 后规则 Schema
+ * 不再接受它们；旧库里残留这些键时先剥掉，避免 strict 校验把整条规则判为非法。
+ */
+function stripRemovedFields(value: unknown): void {
+  if (!value || typeof value !== 'object') return
+  if (Array.isArray(value)) {
+    for (const item of value) stripRemovedFields(item)
+    return
+  }
+  const record = value as Record<string, unknown>
+  delete record.selectorType
+  delete record.itemSelectorType
+  for (const child of Object.values(record)) stripRemovedFields(child)
+}
+
 export function parseStoredConfig(raw: string | null): { config: CrawlRuleConfig; valid: boolean } {
   if (!raw) return { config: createDefaultRuleConfig(), valid: false }
   try {
@@ -214,6 +232,7 @@ export function parseStoredConfig(raw: string | null): { config: CrawlRuleConfig
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       return { config: createDefaultRuleConfig(), valid: false }
     }
+    stripRemovedFields(parsed)
     return { config: parsed as CrawlRuleConfig, valid: true }
   } catch {
     return { config: createDefaultRuleConfig(), valid: false }
@@ -244,7 +263,7 @@ export function findProxyOrThrow(id: number): ProxyRow {
   return proxy
 }
 
-const SUPPORTED_PROXY_PROTOCOLS = new Set(['http', 'https', 'socks5'])
+const SUPPORTED_PROXY_PROTOCOLS = new Set(['http', 'https'])
 
 /**
  * 校验代理可用性。
@@ -257,7 +276,7 @@ export function assertProxyUsable(proxyId: number): ProxyRow {
   const protocol = proxy.protocol ?? ''
   if (!SUPPORTED_PROXY_PROTOCOLS.has(protocol)) {
     throw new ValidationError(`代理 ${proxyId} 的协议 ${protocol || '(空)'} 不受支持`, [
-      { path: 'proxyId', message: '仅支持 http / https / socks5 代理', code: 'invalid_value' },
+      { path: 'proxyId', message: '仅支持 http / https 代理', code: 'invalid_value' },
     ])
   }
   if (proxy.status === 'disabled' || proxy.enabled === 0) {
@@ -276,7 +295,7 @@ export function assertProxyUsable(proxyId: number): ProxyRow {
  * 而不是带着空密码去请求、把问题伪装成「代理不可用」。
  */
 export function proxyToSettings(row: ProxyRow): ProxySettings {
-  const protocol = row.protocol === 'https' ? 'https' : row.protocol === 'socks5' ? 'socks5' : 'http'
+  const protocol = row.protocol === 'https' ? 'https' : 'http'
   const password = decryptProxyPassword(row.password)
   return {
     protocol,

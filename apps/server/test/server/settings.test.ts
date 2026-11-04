@@ -42,9 +42,9 @@ describe('系统设置', () => {
       ]),
     )
 
-    expect(readonly.version).toBe('0.6.0')
+    expect(readonly.version).toBe('0.7.0')
     expect(readonly.databaseFile).toContain('memory')
-    expect(readonly.schemaVersion).toBe(5)
+    expect(readonly.schemaVersion).toBe(7)
     expect(typeof readonly.activeTimeZone).toBe('string')
 
     const concurrency = items.find((item: any) => item.key === 'task.concurrency')

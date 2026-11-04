@@ -81,7 +81,7 @@ describe('html2object 桥接：字段提取', () => {
 
 describe('html2object 桥接：列表项提取', () => {
   it('loop 一次解析全部列表项，字段配置生效', () => {
-    const items = extractListItems(html, 'li.item', 'css', {
+    const items = extractListItems(html, 'li.item', {
       title: { type: 'text', selector: 'a.t', required: true },
       url: { type: 'attr', selector: 'a.t', attribute: 'href', required: true },
       cover: { type: 'attr', selector: 'img.c', attribute: 'src' },
@@ -90,15 +90,6 @@ describe('html2object 桥接：列表项提取', () => {
 
     expect(items).toHaveLength(2)
     expect(items[0]).toMatchObject({ title: '第一条', url: '/news/1.html', cover: '/img/1.png', tag: '置顶' })
-    expect(items[1]).toMatchObject({ title: '第二条', url: '/news/2.html' })
-  })
-
-  it('XPath 容器回退到内置提取器', () => {
-    const items = extractListItems(html, '//li[@class="item"]', 'xpath', {
-      title: { type: 'text', selector: 'a.t' },
-      url: { type: 'attr', selector: 'a.t', attribute: 'href' },
-    })
-    expect(items).toHaveLength(2)
     expect(items[1]).toMatchObject({ title: '第二条', url: '/news/2.html' })
   })
 })

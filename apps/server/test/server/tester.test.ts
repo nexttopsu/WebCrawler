@@ -12,6 +12,7 @@ import type { CrawlRuleConfig } from '../../src/shared/index.js'
 import { createApp } from '../../src/server/app.js'
 import { loadConfig } from '../../src/server/config.js'
 import { createLogger } from '../../src/server/lib/logger.js'
+import { createPluginRegistry } from '../../src/plugin-system/index.js'
 import { call, startTestApp, stopTestApp } from './helpers/app.js'
 import { startSiteFixture, type SiteFixture } from './helpers/site-fixture.js'
 
@@ -346,5 +347,112 @@ describe('HTTP 语义', () => {
     const response = await call(app, '/api/tester/snapshot')
     expect(response.status).toBe(405)
     expect(response.headers.get('allow')).toContain('POST')
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/* 全流程插件试跑                                                              */
+/* -------------------------------------------------------------------------- */
+
+describe('测试器：全流程插件', () => {
+  let pluginApp: H3
+  const registry = createPluginRegistry()
+
+  beforeAll(() => {
+    // 注入注册表时由测试自己决定注册什么：createApp 不会自动注册内置插件
+    pluginApp = createApp({
+      config: { ...loadConfig({}), logLevel: 'error', allowPrivateNetwork: true, proxySecretKey: 'test-secret-key-0123456789' },
+      logger: createLogger('error'),
+      plugins: registry,
+    })
+    registry.register({
+      config: { id: 'fixture-flow', name: 'Fixture 全流程', type: 'flow' },
+      source: 'src/plugins/fixture-flow.ts',
+      getList: async (url: string) => {
+        const base = url.endsWith('/') ? url : `${url}/`
+        return [{ url: new URL('1.html', base).href, title: '插件列表标题' }]
+      },
+      getDetail: async () => ({
+        title: '插件详情标题',
+        content: '<p>插件正文</p>',
+        articleTime: '2026-05-05',
+        extra: { from: 'plugin' },
+      }),
+    })
+    registry.register({
+      config: { id: 'fixture-parser', name: 'Fixture 解析器', type: 'parser' },
+      source: 'src/plugins/fixture-parser.ts',
+      parseDetail: async (_url, fields) => ({ ...fields, title: `${String(fields.title ?? '')}!` }),
+    })
+  })
+
+  it('列表：选中插件后不用写抽取规则，直接返回插件给的条目', async () => {
+    const response = await call(pluginApp, '/api/tester/list', {
+      method: 'POST',
+      body: JSON.stringify({ url: `${fixture.origin}/news`, list: { plugin: 'fixture-flow' } }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = response.body.data
+    expect(data.ok).toBe(true)
+    expect(data.links).toHaveLength(1)
+    expect(data.links[0].url).toBe(`${fixture.origin}/news/1.html`)
+    expect(data.links[0].title).toBe('插件列表标题')
+    // 插件自己发请求，平台侧没有状态码
+    expect(data.statusCode).toBeNull()
+  })
+
+  it('详情：选中插件后由 getDetail 直接给出字段', async () => {
+    const response = await call(pluginApp, '/api/tester/detail', {
+      method: 'POST',
+      body: JSON.stringify({ url: `${fixture.origin}/news/1.html`, plugin: 'fixture-flow' }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = response.body.data
+    expect(data.ok).toBe(true)
+    const keys = data.fields.map((field: { key: string }) => field.key)
+    expect(keys).toEqual(expect.arrayContaining(['title', 'content', 'articleTime']))
+    expect(data.fields.find((field: { key: string }) => field.key === 'title').value).toBe('插件详情标题')
+  })
+
+  it('解析器插件仍按字段后处理链执行（与全流程插件并存）', async () => {
+    const response = await call(pluginApp, '/api/tester/detail', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: `${fixture.origin}/article/2`,
+        fields: { title: { type: 'text', selector: '.article-title', required: true } },
+        parserPlugins: ['fixture-parser'],
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.body.data.ok).toBe(true)
+    // 字段诊断是原始提取值；解析器插件的处理结果体现在最终 article 上
+    expect(response.body.data.fields.find((field: { key: string }) => field.key === 'title').value).toBe(
+      '第二篇报道：轨道交通',
+    )
+    expect(response.body.data.article.title).toBe('第二篇报道：轨道交通!')
+  })
+
+  it('把插件挂到它不支持的阶段时报错，而不是静默返回空', async () => {
+    const response = await call(pluginApp, '/api/tester/list', {
+      method: 'POST',
+      body: JSON.stringify({ url: `${fixture.origin}/news`, list: { plugin: 'fixture-parser' } }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(response.body.data.ok).toBe(false)
+    expect(response.body.data.message).toContain('解析器')
+  })
+
+  it('既没插件也没选择器时报 400', async () => {
+    const response = await call(pluginApp, '/api/tester/list', {
+      method: 'POST',
+      body: JSON.stringify({ url: `${fixture.origin}/news`, list: {} }),
+    })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('VALIDATION_ERROR')
   })
 })

@@ -42,8 +42,9 @@ export interface SnapshotRequestBody extends TesterRequestBase {
 /** 列表规则测试请求：结构即 `CrawlRuleConfig.list` + `pagination`。 */
 export interface ListTestRequestBody extends TesterRequestBase {
   list: {
-    itemSelector: string
-    itemSelectorType?: 'css' | 'xpath'
+    /** 列表插件 id：配置后由插件解析列表页，itemSelector 可省略 */
+    plugin?: string
+    itemSelector?: string
     /** 字段配置写法：title / url 必填，其余自定义（与保存的规则同构） */
     fields?: Record<string, FieldRule>
     linkSelector?: string
@@ -59,9 +60,11 @@ export interface ListTestRequestBody extends TesterRequestBase {
   pagination?: PaginationConfig
 }
 
-/** 详情规则测试请求：字段映射即 `CrawlRuleConfig.fields`。 */
+/** 详情规则测试请求：字段映射即 `CrawlRuleConfig.fields`，或指定详情插件。 */
 export interface DetailTestRequestBody extends TesterRequestBase {
-  fields: Record<string, FieldRule>
+  /** 详情插件 id：配置后由插件解析详情页，fields 可省略 */
+  plugin?: string
+  fields?: Record<string, FieldRule>
   /** 详情阶段排除选择器：提取前先删除命中的节点（与保存的规则同构） */
   excludeSelectors?: string[]
   clean?: { removeSelectors?: string[] }
@@ -204,7 +207,6 @@ export interface PreviewHighlightCommand {
   source: typeof PREVIEW_MESSAGE_SOURCE
   type: 'highlight'
   selector: string | null
-  selectorType?: 'css' | 'xpath'
 }
 
 /** 父页面 → iframe：清除高亮。 */

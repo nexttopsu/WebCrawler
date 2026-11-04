@@ -11,9 +11,10 @@ export * from './proxy-resolver.js'
 export * from './http-client.js'
 export * from './browser-client.js'
 export * from './url-utils.js'
+export * from './scoped-request.js'
 
 export const REQUEST_PACKAGE = {
   name: 'request',
-  version: '0.6.0',
+  version: '0.7.0',
   description: '统一请求层：HTTP / 浏览器 / 代理适配',
 } as const

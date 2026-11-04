@@ -90,7 +90,6 @@ function clean(value: string, rule: FieldRule): string {
 
 /** 提取单个字段。 */
 function extractField(scope: ExtractScope, key: string, rule: FieldRule, required: boolean): FieldExtraction {
-  const selectorType = rule.selectorType ?? 'css'
   const selector = rule.selector?.trim()
 
   if (rule.jsonPath) {
@@ -129,7 +128,7 @@ function extractField(scope: ExtractScope, key: string, rule: FieldRule, require
 
   let nodes: MatchedNode[]
   try {
-    nodes = selectWithin(scope, selector, selectorType)
+    nodes = selectWithin(scope, selector)
   } catch (error) {
     return fail(key, rule, error instanceof Error ? error.message : String(error))
   }
