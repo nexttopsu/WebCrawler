@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Globe, MonitorPlay } from '@lucide/vue'
@@ -8,16 +8,16 @@ import type {
   FieldCleanRule,
   FieldRule,
   PageSnapshotDto,
-  PreviewOutboundMessage,
+  PluginDto,
   TesterDetailResultDto,
   TesterListResultDto,
 } from '@webcrawler/shared'
 import {
-  checkSelector as apiCheckSelector,
   fetchSnapshot,
   testDetailRule,
   testListRule,
 } from '@/api/tester'
+import { listPlugins } from '@/api/plugins'
 import {
   createEmptyDraft,
   loadTesterDraft,
@@ -26,14 +26,19 @@ import {
   type TesterFieldDraft,
 } from '@/composables/useTesterDraft'
 import { usePanelResize } from '@/composables/usePanelResize'
+import { useCommaText } from '@/composables/useCommaText'
 import PreviewPane from '@/components/tester/PreviewPane.vue'
 import ProxySelect from '@/components/tester/ProxySelect.vue'
-import SelectorBar, { type SelectionInfo } from '@/components/tester/SelectorBar.vue'
 import ListConfigPanel from '@/components/tester/ListConfigPanel.vue'
 import FieldConfigPanel from '@/components/tester/FieldConfigPanel.vue'
 import DetailResultPanel from '@/components/tester/DetailResultPanel.vue'
 import ResultPanel from '@/components/tester/ResultPanel.vue'
 import SavePanel from '@/components/tester/SavePanel.vue'
+import {
+  ARTICLE_FIELD_PRESETS,
+  DETAIL_REQUIRED_FIELD_KEYS,
+  LIST_REQUIRED_FIELD_KEYS,
+} from '@/config/article-fields'
 
 /* ------------------------------ 草稿即状态 ------------------------------ */
 
@@ -41,21 +46,24 @@ import SavePanel from '@/components/tester/SavePanel.vue'
 /** 模板里不能出现 `://`，统一从脚本传占位文案。 */
 const LIST_URL_HINT = 'https://example.com/news'
 
-/** 列表字段的内置预设：title / url 必填（服务端 Schema 也强制要求）。 */
-const LIST_FIELD_PRESETS: Array<{
-  key: string
-  label: string
-  type: 'text' | 'html' | 'attr'
-  attribute?: string
-  multiple?: boolean
-  required?: boolean
-}> = [
-  { key: 'title', label: '标题', type: 'text', required: true },
-  { key: 'url', label: '文章链接', type: 'attr', attribute: 'href', required: true },
-  { key: 'cover', label: '封面图', type: 'attr', attribute: 'src' },
-]
 const draft = ref<TesterDraft>(loadTesterDraft() ?? createEmptyDraft())
 const { hasUnsavedChanges, flush } = useTesterDraft(draft)
+
+/* ------------------------------ 解析器插件 ------------------------------ */
+
+/** 解析器插件选项（type=parser 且已启用），用于详情提取后的数据重格式化 */
+const parserPluginOptions = ref<PluginDto[]>([])
+
+async function loadParserPlugins(): Promise<void> {
+  try {
+    const page = await listPlugins({ type: 'parser', enabled: 'true', pageSize: 100 })
+    parserPluginOptions.value = page.items
+  } catch {
+    parserPluginOptions.value = []
+  }
+}
+
+void loadParserPlugins()
 
 onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload)
@@ -73,30 +81,49 @@ onBeforeRouteLeave(() => {
   return window.confirm('测试器有未保存的修改，确定离开吗？')
 })
 
+/* ------------------------------ 排除选择器（逗号分隔输入框） ------------------------------ */
+
+/**
+ * 草稿数组 ↔ 逗号分隔文本，单向同步（打字时只往数组解析，不回写文本），
+ * 否则敲 `,` 会被立即规范化掉导致输入不了逗号。
+ */
+const listExcludeInput = useCommaText(
+  () => draft.value.list.excludeSelectors,
+  (value) => {
+    draft.value.list.excludeSelectors = value
+  },
+)
+
+const detailExcludeInput = useCommaText(
+  () => draft.value.excludeSelectors,
+  (value) => {
+    draft.value.excludeSelectors = value
+  },
+)
+
+/** 预览测试按钮作用于当前页签的排除选择器（列表页签 → 列表排除，详情页签 → 详情排除）。 */
+const activeExcludeSelectors = computed(() =>
+  middleTab.value === 'list' ? draft.value.list.excludeSelectors : draft.value.excludeSelectors,
+)
+
 /* ------------------------------ 布局 ------------------------------ */
 
 const containerRef = ref<HTMLElement | null>(null)
 const { leftRatio, rightRatio, startLeftDivider, startRightDivider } = usePanelResize(containerRef)
 const middleTab = ref<'list' | 'detail'>('list')
 
-/* ------------------------------ 预览与点选 ------------------------------ */
+/* ------------------------------ 页面快照（按页签各自保存） ------------------------------ */
 
-const snapshot = ref<PageSnapshotDto | null>(null)
-const loading = ref(false)
-const previewRef = ref<InstanceType<typeof PreviewPane> | null>(null)
+/** 列表 / 详情页签各自的页面快照与预览「去除」状态，切换页签互不影响。 */
+const snapshots = reactive<{ list: PageSnapshotDto | null; detail: PageSnapshotDto | null }>({
+  list: null,
+  detail: null,
+})
+const stripState = reactive<{ list: boolean; detail: boolean }>({ list: false, detail: false })
 
-const selection = ref<SelectionInfo | null>(null)
-const selector = ref('')
-const matchCount = ref<number | null>(null)
-const matchState = ref<'idle' | 'pending' | 'unique' | 'multi' | 'none' | 'invalid'>('idle')
-const serverChecking = ref(false)
+const activeSnapshot = computed(() => snapshots[middleTab.value])
 
-/**
- * 点选结果的绑定目标：
- * 列表页签下默认填 itemSelector；详情页签下填最后操作的字段。
- * 用户也可以点击输入框旁的「选」按钮显式指定下一个点选的落点。
- */
-const bindingTarget = ref<'list.item' | 'list.link' | 'list.title' | 'list.cover' | `field:${number}`>('list.item')
+const listLoading = ref(false)
 
 async function loadPage(): Promise<void> {
   const url = draft.value.url.trim()
@@ -104,11 +131,7 @@ async function loadPage(): Promise<void> {
     ElMessage.warning('请输入页面地址')
     return
   }
-  loading.value = true
-  selection.value = null
-  selector.value = ''
-  matchState.value = 'idle'
-  matchCount.value = null
+  listLoading.value = true
   try {
     const result = await fetchSnapshot({
       url,
@@ -118,77 +141,12 @@ async function loadPage(): Promise<void> {
     if (!result.ok) {
       ElMessage.error(result.message)
     }
-    snapshot.value = result
-    setLastResult(result, '页面快照')
+    snapshots.list = result
+    setTabResult(result, '页面快照')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '加载失败')
   } finally {
-    loading.value = false
-  }
-}
-
-function onSelected(message: Extract<PreviewOutboundMessage, { type: 'selected' }>): void {
-  selection.value = {
-    tag: message.tag,
-    id: message.id,
-    classes: message.classes,
-    path: message.path,
-    outerHtml: message.outerHtml,
-  }
-  selector.value = message.selector
-  matchCount.value = message.matchCount
-  matchState.value = message.matchCount === 1 ? 'unique' : message.matchCount > 1 ? 'multi' : 'none'
-
-  const target = bindingTarget.value
-  if (target === 'list.item') draft.value.list.itemSelector = message.selector
-  else if (target === 'list.link') draft.value.list.linkSelector = message.selector
-  else if (target === 'list.title') draft.value.list.titleSelector = message.selector
-  else if (target === 'list.cover') draft.value.list.coverSelector = message.selector
-  else {
-    const index = Number(target.slice('field:'.length))
-    const field = draft.value.fields[index]
-    if (field) field.selector = message.selector
-  }
-}
-
-function onHighlightResult(message: Extract<PreviewOutboundMessage, { type: 'highlight-result' }>): void {
-  matchCount.value = message.matchCount
-  if (message.error) {
-    matchState.value = 'invalid'
-    ElMessage.warning(message.error)
-    return
-  }
-  matchState.value = message.matchCount === 1 ? 'unique' : message.matchCount > 1 ? 'multi' : 'none'
-}
-
-/** 把当前输入框中的选择器高亮到预览里（在真实 DOM 中验证）。 */
-function applySelector(): void {
-  if (!selector.value.trim()) return
-  matchState.value = 'pending'
-  previewRef.value?.highlight(selector.value.trim())
-}
-
-/** 在服务端验证选择器（支持 XPath，预览内只支持 CSS）。 */
-async function serverCheck(): Promise<void> {
-  const value = selector.value.trim()
-  if (!value || !draft.value.url.trim()) return
-  serverChecking.value = true
-  matchState.value = 'pending'
-  try {
-    const result = await apiCheckSelector({
-      url: draft.value.url.trim(),
-      selector: value,
-      mode: draft.value.mode,
-      ...(draft.value.proxyId ? { proxyId: draft.value.proxyId } : {}),
-    })
-    matchCount.value = result.matchCount
-    matchState.value = !result.ok ? 'invalid' : result.unique ? 'unique' : result.exists ? 'multi' : 'none'
-    ElMessage.info(result.message)
-  } catch (error) {
-    matchState.value = 'invalid'
-    ElMessage.error(error instanceof Error ? error.message : '验证失败')
-  } finally {
-    serverChecking.value = false
+    listLoading.value = false
   }
 }
 
@@ -201,6 +159,11 @@ async function runListTest(): Promise<void> {
   const url = draft.value.url.trim()
   const itemSelector = draft.value.list.itemSelector.trim()
   if (!url || !itemSelector) return
+  const listFieldRules = listFieldsToRuleFields()
+  if (!listFieldRules.title || !listFieldRules.url) {
+    ElMessage.warning('请先在「列表字段配置」中添加 title 和 url 字段（必填）')
+    return
+  }
   listTesting.value = true
   try {
     const result = await testListRule({
@@ -209,28 +172,18 @@ async function runListTest(): Promise<void> {
       ...(draft.value.proxyId ? { proxyId: draft.value.proxyId } : {}),
       list: {
         itemSelector,
-        ...(Object.keys(listFieldsToRuleFields()).length > 0
-          ? { fields: listFieldsToRuleFields() }
+        fields: listFieldRules,
+        ...(draft.value.list.excludeSelectors.length > 0
+          ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
           : {}),
-        ...(Object.keys(listFieldsToRuleFields()).length === 0 && draft.value.list.linkSelector.trim()
-          ? { linkSelector: draft.value.list.linkSelector.trim() }
-          : {}),
-        ...(Object.keys(listFieldsToRuleFields()).length === 0 && draft.value.list.titleSelector.trim()
-          ? { titleSelector: draft.value.list.titleSelector.trim() }
-          : {}),
-        ...(draft.value.list.coverSelector.trim()
-          ? {
-              coverSelector: draft.value.list.coverSelector.trim(),
-              ...(draft.value.list.coverAttribute.trim()
-                ? { coverAttribute: draft.value.list.coverAttribute.trim() }
-                : {}),
-            }
+        ...(draft.value.list.parserPlugins.length > 0
+          ? { parserPlugins: [...draft.value.list.parserPlugins] }
           : {}),
       },
       ...(draft.value.list.paginationType !== 'none' ? { pagination: buildPagination() } : {}),
     })
     listResult.value = result
-    setLastResult(result, '列表测试')
+    setTabResult(result, '列表测试')
     if (!result.ok) ElMessage.warning(result.message)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '列表测试失败')
@@ -260,6 +213,8 @@ function buildPagination():
 function pickDetail(url: string): void {
   detailUrl.value = url
   middleTab.value = 'detail'
+  // 从列表结果点进来时顺手加载详情页快照，左侧预览立即展示
+  if (snapshots.detail?.url !== url) void loadDetailSnapshot()
 }
 
 /* ------------------------------ 详情测试 ------------------------------ */
@@ -267,13 +222,33 @@ function pickDetail(url: string): void {
 const detailUrl = ref('')
 const detailTesting = ref(false)
 const detailResult = ref<TesterDetailResultDto | null>(null)
+const detailLoading = ref(false)
+
+/** 加载详情页快照（详情页签的左侧预览与「去除」基于它）。 */
+async function loadDetailSnapshot(): Promise<void> {
+  const url = detailUrl.value.trim()
+  if (!url) {
+    ElMessage.warning('请输入详情页地址')
+    return
+  }
+  detailLoading.value = true
+  try {
+    const result = await fetchSnapshot({
+      url,
+      mode: draft.value.mode,
+      ...(draft.value.proxyId ? { proxyId: draft.value.proxyId } : {}),
+    })
+    if (!result.ok) ElMessage.error(result.message)
+    snapshots.detail = result
+    setTabResult(result, '页面快照')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '加载失败')
+  } finally {
+    detailLoading.value = false
+  }
+}
 
 const enabledFieldCount = computed(() => draft.value.fields.filter((field) => field.enabled).length)
-
-function addFieldForSelection(): void {
-  bindingTarget.value = `field:${Math.max(0, draft.value.fields.length - 1)}`
-  ElMessage.info('在左侧预览中点击元素，将填入最后一个字段的 Selector')
-}
 
 async function runDetailTest(): Promise<void> {
   const url = detailUrl.value.trim() || draft.value.url.trim()
@@ -287,14 +262,20 @@ async function runDetailTest(): Promise<void> {
   }
   detailTesting.value = true
   try {
+    // 测试前确保详情页快照已加载，左侧预览展示的才是被测页面
+    if (snapshots.detail?.url !== url) await loadDetailSnapshot()
     const result = await testDetailRule({
       url,
       mode: draft.value.mode,
       ...(draft.value.proxyId ? { proxyId: draft.value.proxyId } : {}),
       fields: fieldsToRuleFields(),
+      ...(draft.value.excludeSelectors.length > 0
+        ? { excludeSelectors: [...draft.value.excludeSelectors] }
+        : {}),
+      ...(draft.value.parserPlugins.length > 0 ? { parserPlugins: [...draft.value.parserPlugins] } : {}),
     })
     detailResult.value = result
-    setLastResult(result, '详情测试')
+    setTabResult(result, '详情测试')
     if (!result.ok) ElMessage.warning(result.message)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '详情测试失败')
@@ -347,25 +328,15 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   }
   if (hasList) {
     const listFieldRules = listFieldsToRuleFields()
-    const useFieldConfig = Object.keys(listFieldRules).length > 0
     config.list = {
       itemSelector: draft.value.list.itemSelector.trim(),
-      // 字段配置是推荐写法；配置了字段时旧版 link/title 选择器不再输出
-      ...(!useFieldConfig && draft.value.list.linkSelector.trim()
-        ? { linkSelector: draft.value.list.linkSelector.trim() }
+      ...(Object.keys(listFieldRules).length > 0 ? { fields: listFieldRules } : {}),
+      ...(draft.value.list.excludeSelectors.length > 0
+        ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
         : {}),
-      ...(!useFieldConfig && draft.value.list.titleSelector.trim()
-        ? { titleSelector: draft.value.list.titleSelector.trim() }
+      ...(draft.value.list.parserPlugins.length > 0
+        ? { parserPlugins: [...draft.value.list.parserPlugins] }
         : {}),
-      ...(draft.value.list.coverSelector.trim()
-        ? {
-            coverSelector: draft.value.list.coverSelector.trim(),
-            ...(draft.value.list.coverAttribute.trim()
-              ? { coverAttribute: draft.value.list.coverAttribute.trim() }
-              : {}),
-          }
-        : {}),
-      ...(useFieldConfig ? { fields: listFieldRules } : {}),
     }
     if (draft.value.list.paginationType !== 'none') {
       config.pagination = buildPagination()
@@ -374,24 +345,60 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   if (Object.keys(fields).length > 0) {
     config.fields = fields
   }
+  if (draft.value.excludeSelectors.length > 0) {
+    config.excludeSelectors = [...draft.value.excludeSelectors]
+  }
+  if (draft.value.parserPlugins.length > 0) {
+    config.parserPlugins = [...draft.value.parserPlugins]
+  }
   return config
 })
 
 function onImported(config: CrawlRuleConfig): void {
   draft.value.url = draft.value.url // 保持当前地址
   draft.value.list.itemSelector = config.list?.itemSelector ?? ''
-  draft.value.list.linkSelector = config.list?.linkSelector ?? ''
-  draft.value.list.titleSelector = config.list?.titleSelector ?? ''
-  draft.value.list.coverSelector = config.list?.coverSelector ?? ''
-  draft.value.list.coverAttribute = config.list?.coverAttribute ?? ''
-  draft.value.list.listFields = Object.entries(config.list?.fields ?? {}).map(([key, rule]) =>
-    toFieldDraft(key, rule),
-  )
+  const importedListFields = Object.entries(config.list?.fields ?? {})
+  if (importedListFields.length === 0 && (config.list?.linkSelector || config.list?.titleSelector)) {
+    // 旧版选择器写法 → 转换为字段配置（url / title）
+    if (config.list?.linkSelector) {
+      importedListFields.push([
+        'url',
+        { type: 'attr', selector: config.list.linkSelector, attribute: config.list.linkAttribute ?? 'href', required: true },
+      ])
+    }
+    if (config.list?.titleSelector) {
+      importedListFields.push(['title', { type: 'text', selector: config.list.titleSelector, required: true }])
+    }
+  }
+  // 旧版封面选择器 → 封面列表字段
+  if (config.list?.coverSelector && !importedListFields.some(([key]) => key === 'cover')) {
+    importedListFields.push([
+      'cover',
+      {
+        type: 'attr',
+        selector: config.list.coverSelector,
+        attribute: config.list.coverAttribute ?? 'src',
+      },
+    ])
+  }
+  draft.value.list.listFields = importedListFields.map(([key, rule]) => toFieldDraft(key, rule))
   const pagination = config.pagination
   draft.value.list.paginationType = pagination?.type ?? 'none'
   draft.value.list.paginationParameter = pagination?.parameter ?? 'page'
   draft.value.list.paginationPathPattern = pagination?.pathPattern ?? '/page/{page}'
   draft.value.list.maxPages = pagination?.maxPages ?? null
+  draft.value.parserPlugins = Array.isArray(config.parserPlugins)
+    ? config.parserPlugins.filter((name): name is string => typeof name === 'string')
+    : []
+  draft.value.list.parserPlugins = Array.isArray(config.list?.parserPlugins)
+    ? config.list.parserPlugins.filter((name): name is string => typeof name === 'string')
+    : []
+  draft.value.list.excludeSelectors = Array.isArray(config.list?.excludeSelectors)
+    ? config.list.excludeSelectors.filter((name): name is string => typeof name === 'string')
+    : []
+  draft.value.excludeSelectors = Array.isArray(config.excludeSelectors)
+    ? config.excludeSelectors.filter((name): name is string => typeof name === 'string')
+    : []
 
   const source = config.fields ?? config.detail?.fields ?? {}
   draft.value.fields = Object.entries(source).map(([key, rule]) => toFieldDraft(key, rule))
@@ -419,24 +426,29 @@ function onSaved(): void {
   hasUnsavedChanges.value = false
 }
 
-/* ------------------------------ 右侧结果 ------------------------------ */
+/* ------------------------------ 右侧结果（按页签各自保存） ------------------------------ */
 
-const lastPayload = ref<unknown>(null)
-const lastPayloadLabel = ref('')
+/** 列表 / 详情页签各自的右侧结果面板内容，切换页签互不影响。 */
+const results = reactive<{ list: { payload: unknown; label: string } | null; detail: { payload: unknown; label: string } | null }>({
+  list: null,
+  detail: null,
+})
 
-function setLastResult(payload: unknown, label: string): void {
-  lastPayload.value = payload
-  lastPayloadLabel.value = label
+function setTabResult(payload: unknown, label: string): void {
+  results[middleTab.value] = { payload, label }
 }
 
+const activeResult = computed(() => results[middleTab.value])
+
 const requestInfo = computed(() => {
-  if (!snapshot.value) return null
+  const snapshot = activeSnapshot.value
+  if (!snapshot) return null
   return {
-    url: snapshot.value.url,
-    finalUrl: snapshot.value.finalUrl,
-    statusCode: snapshot.value.statusCode,
-    elapsedMs: snapshot.value.elapsedMs,
-    mode: snapshot.value.mode,
+    url: snapshot.url,
+    finalUrl: snapshot.finalUrl,
+    statusCode: snapshot.statusCode,
+    elapsedMs: snapshot.elapsedMs,
+    mode: snapshot.mode,
   }
 })
 </script>
@@ -467,30 +479,20 @@ const requestInfo = computed(() => {
         </el-radio-button>
       </el-radio-group>
       <ProxySelect v-model="draft.proxyId" />
-      <el-button type="primary" :loading="loading" @click="loadPage">加载页面</el-button>
+      <el-button type="primary" :loading="listLoading" @click="loadPage">加载页面</el-button>
     </header>
 
     <!-- 三栏布局 -->
     <div ref="containerRef" class="columns">
       <section class="pane" :style="{ flexBasis: `${leftRatio * 100}%` }">
         <PreviewPane
-          ref="previewRef"
-          :snapshot-html="snapshot?.ok ? snapshot.html : ''"
-          :base="snapshot?.base ?? null"
-          :title="snapshot?.title ?? null"
-          :status-code="snapshot?.statusCode ?? null"
-          @ready="() => applySelector()"
-          @selected="onSelected"
-          @highlight-result="onHighlightResult"
-        />
-        <SelectorBar
-          v-model:selector="selector"
-          :selection="selection"
-          :match-count="matchCount"
-          :match-state="matchState"
-          :checking="serverChecking"
-          @apply="applySelector"
-          @server-check="serverCheck"
+          :snapshot-html="activeSnapshot?.ok ? activeSnapshot.html : ''"
+          :base="activeSnapshot?.base ?? null"
+          :title="activeSnapshot?.title ?? null"
+          :status-code="activeSnapshot?.statusCode ?? null"
+          :exclude-selectors="activeExcludeSelectors"
+          :strip-active="stripState[middleTab]"
+          @update:strip-active="stripState[middleTab] = $event"
         />
       </section>
 
@@ -499,21 +501,40 @@ const requestInfo = computed(() => {
       <section class="pane pane-middle">
         <el-tabs v-model="middleTab" class="middle-tabs">
           <el-tab-pane label="列表规则" name="list">
-            <div class="binding-row">
-              <span class="binding-label">点击预览元素填入：</span>
-              <el-radio-group v-model="bindingTarget" size="small">
-                <el-radio-button value="list.item">itemSelector</el-radio-button>
-                <el-radio-button value="list.link">linkSelector</el-radio-button>
-                <el-radio-button value="list.title">titleSelector</el-radio-button>
-                <el-radio-button value="list.cover">coverSelector</el-radio-button>
-              </el-radio-group>
+            <div class="plugin-row">
+              <span class="plugin-row__label">解析器插件（列表）</span>
+              <el-select
+                v-model="draft.list.parserPlugins"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                size="small"
+                placeholder="不使用插件"
+                class="plugin-row__select"
+              >
+                <el-option
+                  v-for="plugin in parserPluginOptions"
+                  :key="plugin.name"
+                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                  :value="plugin.name"
+                />
+              </el-select>
+              <span class="binding-hint">仅对列表字段提取后生效，与详情互不影响</span>
+            </div>
+            <div class="plugin-row">
+              <span class="plugin-row__label">排除选择器（列表）</span>
+              <el-input
+                v-model="listExcludeInput"
+                size="small"
+                clearable
+                placeholder="如 .ad, .time（逗号分隔，可不填）"
+                class="plugin-row__select"
+              />
+              <span class="binding-hint">优先级最高：字段提取前先删除命中的节点（混淆 / 广告），可不填</span>
             </div>
             <ListConfigPanel
               v-model:item-selector="draft.list.itemSelector"
-              v-model:link-selector="draft.list.linkSelector"
-              v-model:title-selector="draft.list.titleSelector"
-              v-model:cover-selector="draft.list.coverSelector"
-              v-model:cover-attribute="draft.list.coverAttribute"
               v-model:pagination-type="draft.list.paginationType"
               v-model:pagination-parameter="draft.list.paginationParameter"
               v-model:pagination-path-pattern="draft.list.paginationPathPattern"
@@ -527,26 +548,64 @@ const requestInfo = computed(() => {
             <FieldConfigPanel
               v-model:fields="draft.list.listFields"
               class="list-fields-panel"
-              title="列表字段配置（推荐）"
-              subtitle="title 与 url 必填；配置后 linkSelector / titleSelector 不再生效"
-              :built-ins="LIST_FIELD_PRESETS"
+              title="列表字段配置"
+              subtitle="title 与 url 必填；其余内置字段与详情规则一致，自定义字段随链接入库存入 extra"
+              :built-ins="ARTICLE_FIELD_PRESETS"
+              :required-keys="LIST_REQUIRED_FIELD_KEYS"
             />
           </el-tab-pane>
 
           <el-tab-pane :label="`详情规则（${enabledFieldCount}）`" name="detail">
+            <div class="plugin-row">
+              <span class="plugin-row__label">解析器插件（详情）</span>
+              <el-select
+                v-model="draft.parserPlugins"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                size="small"
+                placeholder="不使用插件"
+                class="plugin-row__select"
+              >
+                <el-option
+                  v-for="plugin in parserPluginOptions"
+                  :key="plugin.name"
+                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                  :value="plugin.name"
+                />
+              </el-select>
+              <span class="binding-hint">仅对详情字段提取后生效，与列表互不影响</span>
+            </div>
+            <div class="plugin-row">
+              <span class="plugin-row__label">排除选择器（详情）</span>
+              <el-input
+                v-model="detailExcludeInput"
+                size="small"
+                clearable
+                placeholder="如 .ad, .author-info（逗号分隔，可不填）"
+                class="plugin-row__select"
+              />
+              <span class="binding-hint">优先级最高：字段提取前先删除命中的节点（混淆 / 广告），可不填</span>
+            </div>
             <div class="detail-url-row">
               <el-input
                 v-model="detailUrl"
                 size="small"
                 placeholder="详情页地址（可从列表测试结果点击选择）"
                 clearable
+                @keyup.enter="loadDetailSnapshot"
               />
-              <el-button size="small" @click="addFieldForSelection">选到字段</el-button>
+              <el-button size="small" :loading="detailLoading" @click="loadDetailSnapshot">
+                加载页面
+              </el-button>
             </div>
             <FieldConfigPanel
               v-model:fields="draft.fields"
               title="字段配置"
-              subtitle="与第三阶段 Rule Schema 同构，保存后可直接被采集引擎执行"
+              subtitle="与列表规则共用同一套内置字段；保存后可直接被采集引擎执行"
+              :built-ins="ARTICLE_FIELD_PRESETS"
+              :required-keys="DETAIL_REQUIRED_FIELD_KEYS"
             />
             <DetailResultPanel
               :result="detailResult"
@@ -563,8 +622,8 @@ const requestInfo = computed(() => {
       <section class="pane" :style="{ flexBasis: `${rightRatio * 100}%` }">
         <ResultPanel
           :request="requestInfo"
-          :payload="lastPayload"
-          :payload-label="lastPayloadLabel"
+          :payload="activeResult?.payload"
+          :payload-label="activeResult?.label ?? ''"
         />
         <SavePanel :config="ruleConfig" @saved="onSaved" @imported="onImported" />
       </section>
@@ -657,7 +716,8 @@ const requestInfo = computed(() => {
 }
 
 .middle-tabs {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .list-fields-panel {
@@ -683,6 +743,31 @@ const requestInfo = computed(() => {
   white-space: nowrap;
 }
 
+.binding-hint {
+  font-size: 11.5px;
+  color: var(--wb-text-muted);
+}
+
+.plugin-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.plugin-row__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wb-text-secondary);
+  white-space: nowrap;
+}
+
+.plugin-row__select {
+  flex: 0 1 300px;
+  min-width: 180px;
+}
+
 .detail-url-row {
   display: flex;
   gap: 8px;
@@ -690,7 +775,7 @@ const requestInfo = computed(() => {
 }
 
 /*
- * 小屏幕：不允许再并排三栏（DOM 点选需要空间），改为纵向排列并可滚动。
+ * 小屏幕：不允许再并排三栏，改为纵向排列并可滚动。
  * 拖拽把手隐藏，各面板固定最小高度，避免被压成 0。
  */
 @media (max-width: 1180px) {

@@ -29,8 +29,6 @@ export interface TaskOptions {
   publishedBefore?: string
   /** 是否启用增量：跳过已存在于库中的 URL，默认跟随任务类型 */
   incremental?: boolean
-  /** 内容 Hash 去重，默认 true */
-  dedupeByContentHash?: boolean
   /** 任务总时长上限（毫秒），默认 30 分钟 */
   maxDurationMs?: number
   /** 是否按规则翻页，默认 true */

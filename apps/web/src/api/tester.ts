@@ -9,8 +9,6 @@ import type {
   RuleSummaryDto,
   CategorySummaryDto,
   SiteDto,
-  SelectorCheckDto,
-  SelectorCheckRequestBody,
   SnapshotRequestBody,
   TesterDetailResultDto,
   TesterListResultDto,
@@ -42,10 +40,6 @@ export function testDetailRule(body: DetailTestRequestBody): Promise<TesterDetai
   return apiRequest<TesterDetailResultDto>('/tester/detail', { method: 'POST', body: JSON.stringify(body) })
 }
 
-/** 在服务端验证 Selector 匹配数量（支持 XPath；预览内只支持 CSS）。 */
-export function checkSelector(body: SelectorCheckRequestBody): Promise<SelectorCheckDto> {
-  return apiRequest<SelectorCheckDto>('/tester/selector', { method: 'POST', body: JSON.stringify(body) })
-}
 
 /** 用第三阶段 Rule Schema 校验完整规则 JSON。 */
 export function validateRuleConfig(config: unknown): Promise<RuleValidationDto> {

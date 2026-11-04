@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import {
-  isPreviewOutboundMessage,
-  type PreviewOutboundMessage,
-} from '@webcrawler/shared'
-import { buildPreviewDocument } from '@/preview/agent-source'
+import { computed, ref } from 'vue'
+import { Eraser, RotateCcw } from '@lucide/vue'
+import { ElMessage } from 'element-plus'
+import { buildPreviewDocument } from '@/preview/preview-document'
 
 const props = defineProps<{
   /** 服务端返回的已清洗快照 HTML */
@@ -15,59 +13,64 @@ const props = defineProps<{
   title?: string | null
   /** 响应状态码 */
   statusCode?: number | null
+  /** 当前页签的排除选择器（测试按钮按此实时删节点） */
+  excludeSelectors?: readonly string[]
+  /** 排除测试状态（受控，由父组件按页签各自保存） */
+  stripActive?: boolean
 }>()
 
 const emit = defineEmits<{
-  ready: []
-  selected: [message: Extract<PreviewOutboundMessage, { type: 'selected' }>]
-  highlightResult: [message: Extract<PreviewOutboundMessage, { type: 'highlight-result' }>]
+  (event: 'update:stripActive', value: boolean): void
 }>()
 
-const iframeRef = ref<HTMLIFrameElement | null>(null)
+/** 视图模式：网页渲染 / HTML 源码 */
+const viewMode = ref<'page' | 'html'>('page')
 
-const srcdoc = computed(() =>
-  props.snapshotHtml ? buildPreviewDocument(props.snapshotHtml) : emptyDocument(),
-)
-
-function emptyDocument(): string {
-  return '<!doctype html><html><body style="font-family:sans-serif;color:#8a94a6;display:grid;place-items:center;height:100vh;margin:0">输入地址并点击「加载页面」开始</body></html>'
+/** 浏览器端按选择器删除节点（仅用于预览测试，真实采集走服务端 stripElements）。 */
+function stripElementsInBrowser(
+  html: string,
+  selectors: readonly string[],
+): { html: string; removed: number } {
+  if (!html.trim()) return { html, removed: 0 }
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  let removed = 0
+  for (const selector of selectors) {
+    const trimmed = selector.trim()
+    if (!trimmed) continue
+    try {
+      const nodes = doc.querySelectorAll(trimmed)
+      removed += nodes.length
+      nodes.forEach((node) => node.remove())
+    } catch {
+      // 非法选择器跳过（与服务端 stripElements 行为一致）
+    }
+  }
+  return { html: doc.documentElement.outerHTML, removed }
 }
 
-function onMessage(event: MessageEvent): void {
-  // 双重校验：消息必须来自本 iframe，且结构符合受控协议
-  if (event.source !== iframeRef.value?.contentWindow) return
-  if (!isPreviewOutboundMessage(event.data)) return
+/** 排除结果：未开启时透传快照；开启后实时按选择器删除并统计命中数。 */
+const stripped = computed(() => {
+  if (!props.stripActive) return { html: props.snapshotHtml, removed: 0 }
+  return stripElementsInBrowser(props.snapshotHtml, props.excludeSelectors ?? [])
+})
 
-  if (event.data.type === 'ready') emit('ready')
-  else if (event.data.type === 'selected') emit('selected', event.data)
-  else if (event.data.type === 'highlight-result') emit('highlightResult', event.data)
+const displayHtml = computed(() => stripped.value.html)
+const removedCount = computed(() => stripped.value.removed)
+
+function applyExclude(): void {
+  const selectors = (props.excludeSelectors ?? []).filter((item) => item.trim())
+  if (selectors.length === 0) {
+    ElMessage.warning('请先在排除选择器输入框中填写 CSS 选择器（可用逗号分隔多个）')
+    return
+  }
+  emit('update:stripActive', true)
 }
 
-/** 高亮某选择器的所有匹配（校验在 iframe 内的真实 DOM 中进行）。 */
-function highlight(selector: string | null, selectorType: 'css' | 'xpath' = 'css'): void {
-  iframeRef.value?.contentWindow?.postMessage(
-    { source: 'webcrawler-preview', type: 'highlight', selector, selectorType },
-    '*',
-  )
+function restoreExclude(): void {
+  emit('update:stripActive', false)
 }
 
-/** 清除高亮与选中标记。 */
-function clearMarks(): void {
-  iframeRef.value?.contentWindow?.postMessage(
-    { source: 'webcrawler-preview', type: 'clear' },
-    '*',
-  )
-}
-
-onMounted(() => window.addEventListener('message', onMessage))
-onBeforeUnmount(() => window.removeEventListener('message', onMessage))
-
-watch(
-  () => props.snapshotHtml,
-  () => clearMarks(),
-)
-
-defineExpose({ highlight, clearMarks })
+const srcdoc = computed(() => buildPreviewDocument(displayHtml.value))
 </script>
 
 <template>
@@ -79,20 +82,49 @@ defineExpose({ highlight, clearMarks })
       </span>
       <span v-if="base" class="preview-base" :title="base">基准：{{ base }}</span>
       <span v-else class="preview-base is-empty">尚未加载</span>
+      <span v-if="stripActive" class="preview-strip-state">
+        已排除 {{ removedCount }} 个节点（实时生效）
+      </span>
+      <div class="preview-actions">
+        <el-button-group size="small" class="strip-group">
+          <el-button
+            size="small"
+            :icon="Eraser"
+            :type="stripActive ? 'primary' : ''"
+            :disabled="!snapshotHtml"
+            @click="applyExclude"
+          >
+            去除
+          </el-button>
+          <el-button
+            size="small"
+            :icon="RotateCcw"
+            :disabled="!stripActive"
+            @click="restoreExclude"
+          >
+            还原
+          </el-button>
+        </el-button-group>
+        <el-radio-group v-model="viewMode" size="small">
+          <el-radio-button value="page">网页预览</el-radio-button>
+          <el-radio-button value="html">查看 HTML</el-radio-button>
+        </el-radio-group>
+      </div>
     </div>
     <!--
-      安全隔离：
+      网页视图：安全隔离。
       - allow-scripts 之外全部关闭：无 same-origin（读不到后台数据）、无 top-navigation、无 popup；
-      - 内容是服务端清洗后的快照，目标站点脚本不可能执行；
-      - 注入脚本通过受控 postMessage 协议与父页面通信。
+      - 内容是服务端清洗后的快照，目标站点脚本不可能执行。
     -->
     <iframe
-      ref="iframeRef"
+      v-if="viewMode === 'page'"
       class="preview-frame"
       sandbox="allow-scripts"
       :srcdoc="srcdoc"
       title="网页预览"
     />
+    <!-- HTML 源码视图：开启排除后同样实时展示删除后的源码 -->
+    <pre v-else class="preview-source">{{ displayHtml || '暂无内容，先加载页面' }}</pre>
   </div>
 </template>
 
@@ -108,19 +140,20 @@ defineExpose({ highlight, clearMarks })
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--wb-border);
   font-size: 12px;
   color: var(--wb-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
 }
 
 .preview-title {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--wb-text-secondary);
   font-weight: 500;
 }
@@ -141,12 +174,36 @@ defineExpose({ highlight, clearMarks })
 
 .preview-base {
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .preview-base.is-empty {
   opacity: 0.6;
+}
+
+.preview-strip-state {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--wb-primary-soft);
+  color: var(--wb-primary);
+  font-size: 11px;
+}
+
+.preview-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.strip-group {
+  margin-right: 4px;
 }
 
 .preview-frame {
@@ -154,5 +211,20 @@ defineExpose({ highlight, clearMarks })
   width: 100%;
   border: 0;
   background: #fff;
+}
+
+.preview-source {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--wb-mono, ui-monospace, SFMono-Regular, Consolas, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--wb-text-secondary);
+  background: var(--wb-surface-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
 }
 </style>

@@ -20,10 +20,6 @@ function article(overrides: Partial<ArticleData> = {}): ArticleData {
     title: `文章 ${id}`,
     url: `https://example.com/article/${id}`,
     content: `正文内容 ${id}`,
-    html: `<p>正文内容 ${id}</p>`,
-    images: [`https://example.com/images/${id}.png`],
-    contentHash: `hash-${id}`,
-    crawlTime: '2026-02-01T00:00:00.000Z',
     ...overrides,
   }
 }
@@ -47,7 +43,7 @@ describe('文章管理', () => {
         article: article({
           title: '城市更新报道',
           url: 'https://example.com/article/1',
-          publishTime: '2026-01-01 09:00',
+          articleTime: '2026-01-01 09:00',
           content: '城市更新项目在本月启动，居民代表参与讨论。',
         }),
         siteId: site.id,
@@ -63,7 +59,7 @@ describe('文章管理', () => {
         article: article({
           title: '轨道交通报道',
           url: 'https://example.com/article/2',
-          publishTime: '2026-01-02 10:30',
+          articleTime: '2026-01-02 10:30',
           content: '新线路进入试运行阶段。',
         }),
         siteId: site.id,
@@ -78,7 +74,7 @@ describe('文章管理', () => {
         article: article({
           title: '社区服务报道',
           url: 'https://example.com/article/3?utm_source=wechat',
-          publishTime: '2026-01-03 14:15',
+          articleTime: '2026-01-03 14:15',
           content: '社区服务中心延长开放时间。',
         }),
         siteId: site.id,
@@ -91,7 +87,7 @@ describe('文章管理', () => {
 
   afterAll(() => stopTestApp())
 
-  it('列表：分页、关键词、站点筛选与发布时间排序', async () => {
+  it('列表：分页、关键词、站点筛选与文章时间排序', async () => {
     const all = await call(app, '/api/articles?pageSize=2')
     expect(all.status).toBe(200)
     expect(all.body.data.total).toBe(3)
@@ -105,7 +101,7 @@ describe('文章管理', () => {
     const filtered = await call(app, `/api/articles?siteId=${site.id}&categoryId=${category.id}`)
     expect(filtered.body.data.total).toBe(3)
 
-    const sorted = await call(app, '/api/articles?sort=publishedAt&order=asc')
+    const sorted = await call(app, '/api/articles?sort=articleTime&order=asc')
     expect(sorted.body.data.items.map((item: any) => item.title)).toEqual([
       '城市更新报道',
       '轨道交通报道',
@@ -114,7 +110,7 @@ describe('文章管理', () => {
 
     const range = await call(
       app,
-      '/api/articles?publishedFrom=2026-01-02T00:00:00.000Z&publishedTo=2026-01-03T00:00:00.000Z',
+      '/api/articles?articleTimeFrom=2026-01-02T00:00:00.000Z&articleTimeTo=2026-01-03T00:00:00.000Z',
     )
     expect(range.body.data.total).toBe(1)
     expect(range.body.data.items[0].title).toBe('轨道交通报道')
@@ -127,28 +123,26 @@ describe('文章管理', () => {
     expect(urls).not.toContain('https://example.com/article/3?utm_source=wechat')
   })
 
-  it('详情包含正文、清洗后 HTML、图片与站点栏目名', async () => {
+  it('详情包含正文、文章时间与站点栏目名', async () => {
     const list = await call(app, '/api/articles?keyword=城市更新')
     const id = list.body.data.items[0].id
 
     const detail = await call(app, `/api/articles/${id}`)
     expect(detail.status).toBe(200)
     expect(detail.body.data.content).toContain('城市更新项目')
-    expect(detail.body.data.contentHtml).toContain('<p>')
-    expect(detail.body.data.images).toHaveLength(1)
     expect(detail.body.data.siteName).toBe('示例站点')
     expect(detail.body.data.categoryName).toBe('新闻')
+    expect(detail.body.data.articleTime).toMatch(/^2026-01-01T/)
 
     const raw = await call(app, `/api/articles/${id}/raw`)
     expect(raw.body.data.html).toContain('<h1>城市更新报道</h1>')
   })
 
-  it('封面图字段：显式值优先、缺省回退正文首图、都没有时为空', async () => {
+  it('封面图字段：显式值优先、未给封面时为空', async () => {
     const explicit = saveCrawledArticle(
       {
         article: article({
           url: 'https://example.com/cover/1',
-          contentHash: 'cover-hash-1',
           coverUrl: 'https://cdn.example.com/cover-1.png',
         }),
         siteId: site.id,
@@ -160,31 +154,12 @@ describe('文章管理', () => {
     const explicitDetail = await call(app, `/api/articles/${explicit.articleId}`)
     expect(explicitDetail.body.data.coverUrl).toBe('https://cdn.example.com/cover-1.png')
 
-    // 未给封面时沿用原有行为：回退正文首图
-    const fallback = saveCrawledArticle(
-      {
-        article: article({
-          url: 'https://example.com/cover/2',
-          contentHash: 'cover-hash-2',
-          coverUrl: null,
-        }),
-        siteId: site.id,
-        categoryId: category.id,
-        taskId: null,
-      },
-      {},
-    )
-    const fallbackDetail = await call(app, `/api/articles/${fallback.articleId}`)
-    expect(fallbackDetail.body.data.coverUrl).toBe('https://example.com/images/2.png')
-
-    // 既没有封面也没有图片：允许为空，不能编造地址
+    // 既没有封面：允许为空，不能编造地址（不再回退正文首图）
     const empty = saveCrawledArticle(
       {
         article: article({
           url: 'https://example.com/cover/3',
-          contentHash: 'cover-hash-3',
           coverUrl: null,
-          images: [],
         }),
         siteId: site.id,
         categoryId: category.id,
@@ -196,49 +171,13 @@ describe('文章管理', () => {
     expect(emptyDetail.body.data.coverUrl).toBeNull()
   })
 
-  it('内容 Hash 去重：不同 URL 相同内容只保留一条', () => {
-    const first = saveCrawledArticle(
-      {
-        article: article({ url: 'https://example.com/dup/1', contentHash: 'same-hash', title: '重复内容' }),
-        siteId: site.id,
-        categoryId: category.id,
-        taskId: null,
-      },
-      {},
-    )
-    expect(first.status).toBe('created')
-
-    const second = saveCrawledArticle(
-      {
-        article: article({ url: 'https://example.com/dup/2', contentHash: 'same-hash', title: '重复内容' }),
-        siteId: site.id,
-        categoryId: category.id,
-        taskId: null,
-      },
-      {},
-    )
-    expect(second.status).toBe('skipped')
-    expect(second.reason).toContain('内容重复')
-  })
-
-  it('同一 URL 内容未变化时跳过，内容变化时更新', async () => {
-    const unchanged = saveCrawledArticle(
-      {
-        article: article({ url: 'https://example.com/article/1', contentHash: 'hash-1' }),
-        siteId: site.id,
-        categoryId: category.id,
-        taskId: null,
-      },
-      {},
-    )
-    expect(unchanged.status).toBe('skipped')
-
-    const changed = saveCrawledArticle(
+  it('同一 URL 再次采集时直接更新，不再按内容 Hash 跳过', async () => {
+    const outcome = saveCrawledArticle(
       {
         article: article({
           url: 'https://example.com/article/1',
-          contentHash: 'hash-1-updated',
           title: '城市更新报道（更新）',
+          content: '城市更新项目有新进展，居民代表再次参与讨论。',
         }),
         siteId: site.id,
         categoryId: category.id,
@@ -246,9 +185,12 @@ describe('文章管理', () => {
       },
       {},
     )
-    expect(changed.status).toBe('updated')
-    const detail = await call(app, `/api/articles/${changed.articleId}`)
+    expect(outcome.status).toBe('updated')
+    expect(outcome.articleId).toBeDefined()
+
+    const detail = await call(app, `/api/articles/${outcome.articleId}`)
     expect(detail.body.data.title).toBe('城市更新报道（更新）')
+    expect(detail.body.data.content).toContain('新进展')
   })
 
   it('导出 JSON：Content-Disposition、条数上限与结构正确', async () => {
@@ -259,11 +201,11 @@ describe('文章管理', () => {
     expect(response.headers.get('x-export-limit')).toBe('2')
 
     const text = await response.text()
-    const parsed = JSON.parse(text) as Array<{ id: number; title: string; images: string[] }>
+    const parsed = JSON.parse(text) as Array<{ id: number; title: string; articleTime: string | null }>
     expect(parsed.length).toBe(2)
-    expect(parsed[0]).toHaveProperty('contentHash')
+    expect(parsed[0]).toHaveProperty('articleTime')
     expect(parsed[0]).toHaveProperty('coverUrl')
-    expect(Array.isArray(parsed[0]!.images)).toBe(true)
+    expect(parsed[0]).toHaveProperty('detailStatus')
   })
 
   it('导出 CSV：带 BOM 表头、按行转义', async () => {

@@ -6,10 +6,6 @@ import { RefreshCw } from '@lucide/vue'
 const props = defineProps<{
   /** 列表模式配置（v-model 系列字段） */
   itemSelector: string
-  linkSelector: string
-  titleSelector: string
-  coverSelector: string
-  coverAttribute: string
   paginationType: 'none' | 'query' | 'path' | 'next' | 'cursor'
   paginationParameter: string
   paginationPathPattern: string
@@ -22,10 +18,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:itemSelector': [value: string]
-  'update:linkSelector': [value: string]
-  'update:titleSelector': [value: string]
-  'update:coverSelector': [value: string]
-  'update:coverAttribute': [value: string]
   'update:paginationType': [value: 'none' | 'query' | 'path' | 'next' | 'cursor']
   'update:paginationParameter': [value: string]
   'update:paginationPathPattern': [value: string]
@@ -48,6 +40,12 @@ const duplicateWarning = computed(() => {
     ? `发现 ${props.result.duplicateCount} 条重复/非法链接`
     : '没有重复链接'
 })
+
+/** 预览行的次要信息：作者 / 文章时间 / 摘要，只显示抽到的部分。 */
+function linkMeta(link: { author?: string | null; articleTime?: string | null; summary?: string | null }): string {
+  const summary = link.summary ? `${link.summary.slice(0, 40)}${link.summary.length > 40 ? '…' : ''}` : ''
+  return [link.author, link.articleTime, summary].filter(Boolean).join(' · ')
+}
 </script>
 
 <template>
@@ -60,42 +58,6 @@ const duplicateWarning = computed(() => {
           size="small"
           placeholder=".news-item"
           @update:model-value="emit('update:itemSelector', $event)"
-        />
-      </label>
-      <label>
-        <span>文章链接 linkSelector</span>
-        <el-input
-          :model-value="linkSelector"
-          size="small"
-          placeholder="a.title（默认找第一个 a）"
-          @update:model-value="emit('update:linkSelector', $event)"
-        />
-      </label>
-      <label>
-        <span>列表标题 titleSelector</span>
-        <el-input
-          :model-value="titleSelector"
-          size="small"
-          placeholder=".title（默认用链接文本）"
-          @update:model-value="emit('update:titleSelector', $event)"
-        />
-      </label>
-      <label>
-        <span>列表封面 coverSelector</span>
-        <el-input
-          :model-value="coverSelector"
-          size="small"
-          placeholder="img（列表页有缩略图时配置）"
-          @update:model-value="emit('update:coverSelector', $event)"
-        />
-      </label>
-      <label>
-        <span>封面属性 coverAttribute</span>
-        <el-input
-          :model-value="coverAttribute"
-          size="small"
-          placeholder="src（懒加载可填 data-src）"
-          @update:model-value="emit('update:coverAttribute', $event)"
         />
       </label>
       <label>
@@ -140,6 +102,7 @@ const duplicateWarning = computed(() => {
       </div>
     </div>
 
+
     <div class="test-row">
       <el-button
         type="primary"
@@ -173,7 +136,10 @@ const duplicateWarning = computed(() => {
         @click="emit('pickDetail', link.url)"
       >
         <img v-if="link.coverUrl" class="link-cover" :src="link.coverUrl" alt="" loading="lazy" />
-        <span class="link-title">{{ link.title || '(无标题)' }}</span>
+        <span class="link-body">
+          <span class="link-title">{{ link.title || '(无标题)' }}</span>
+          <span v-if="linkMeta(link)" class="link-meta">{{ linkMeta(link) }}</span>
+        </span>
         <code class="link-url">{{ link.url }}</code>
       </div>
     </div>
@@ -199,6 +165,7 @@ const duplicateWarning = computed(() => {
 .span-2 {
   grid-column: span 2;
 }
+
 
 .pair {
   display: flex;
@@ -260,7 +227,7 @@ const duplicateWarning = computed(() => {
 
 .link-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   padding: 4px 6px;
   border-radius: var(--wb-radius-sm);
@@ -276,9 +243,24 @@ const duplicateWarning = computed(() => {
   background: var(--wb-success-soft);
 }
 
-.link-title {
+.link-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   flex: 0 1 auto;
+  min-width: 0;
+}
+
+.link-title {
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.link-meta {
+  font-size: 11px;
+  color: var(--wb-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

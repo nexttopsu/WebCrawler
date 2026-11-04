@@ -17,11 +17,8 @@ export const migration003Stage5Indexes: Migration = {
       CREATE INDEX IF NOT EXISTS ix_crawl_task_schedule ON crawl_task (scheduleId);
       CREATE INDEX IF NOT EXISTS ix_crawl_task_schedule_status ON crawl_task (scheduleId, status);
 
-      -- 文章：增量判断与列表筛选
+      -- 文章：列表筛选
       CREATE INDEX IF NOT EXISTS ix_article_site_category ON article (siteId, categoryId);
-      CREATE INDEX IF NOT EXISTS ix_article_content_hash ON article (contentHash);
-      CREATE INDEX IF NOT EXISTS ix_article_crawl_time ON article (crawlTime);
-      CREATE INDEX IF NOT EXISTS ix_article_site_published ON article (siteId, publishedAt);
 
       -- 代理：类型与启用状态筛选
       CREATE INDEX IF NOT EXISTS ix_proxy_protocol ON proxy (protocol);

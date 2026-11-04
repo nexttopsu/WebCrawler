@@ -129,7 +129,7 @@ export type CrawlTaskFields = typeof crawlTaskFields
 export type CrawlTaskRow = ModelRow<CrawlTaskFields>
 export const CRAWL_TASK_TABLE = 'crawl_task'
 
-/** 文章。正文同时保留纯文本、清洗后 HTML 与原始 HTML（有大小上限）。 */
+/** 文章。正文保留纯文本与原始 HTML（有大小上限）。 */
 export const articleFields = {
   siteId: 'INTEGER',
   categoryId: 'INTEGER',
@@ -140,28 +140,15 @@ export const articleFields = {
   summary: 'TEXT',
   /** 纯文本正文 */
   content: 'TEXT',
-  /** 清洗后的正文 HTML */
-  contentHtml: 'TEXT',
   /** 抓取到的原始 HTML，供「原始数据」查看 */
   rawHtml: 'TEXT',
   coverUrl: 'TEXT',
-  /** 正文图片地址数组（JSON） */
-  images: 'TEXT',
-  /** 正文内容哈希，用于跨 URL 去重与更新检测 */
-  contentHash: 'TEXT',
-  wordCount: 'INTEGER',
-  publishedAt: 'TEXT',
-  status: 'TEXT',
   /** 规则中未映射到标准字段的其余字段（JSON） */
   extra: 'TEXT',
   /** 详情采集状态：pending（仅列表入库）/ collected（详情已采集）/ failed（详情失败） */
   detailStatus: 'TEXT',
-  /** 详情采集完成时间（ISO 8601） */
-  detailCollectedAt: 'TEXT',
-  /** 详情最近一次失败的摘要 */
-  detailError: 'TEXT',
-  /** 本次抓取时间（ISO 8601） */
-  crawlTime: 'TEXT',
+  /** 文章时间：采集数据时标注的原站点发布时间（ISO 8601） */
+  articleTime: 'TEXT',
 } as const satisfies ModelFields
 export type ArticleFields = typeof articleFields
 export type ArticleRow = ModelRow<ArticleFields>

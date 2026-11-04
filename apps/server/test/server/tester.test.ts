@@ -137,6 +137,10 @@ describe('POST /api/tester/list', () => {
       url: `${fixture.origin}/article/1`,
       title: '第一篇报道：城市更新',
       coverUrl: null,
+      // 未配置列表字段映射时，内置字段一律为 null
+      author: null,
+      summary: null,
+      articleTime: null,
     })
   })
 
@@ -153,6 +157,31 @@ describe('POST /api/tester/list', () => {
     expect(response.body.data.ok).toBe(true)
     expect(response.body.data.itemCount).toBe(0)
     expect(response.body.data.message).toContain('没有命中')
+  })
+
+  it('列表字段映射支持文章内置字段，并在预览里回显文章时间', async () => {
+    const response = await call(app, '/api/tester/list', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: `${fixture.origin}/news`,
+        list: {
+          itemSelector: '.news-item',
+          fields: {
+            url: { type: 'attr', selector: 'a.title', attribute: 'href', required: true },
+            title: { type: 'text', selector: 'a.title', required: true },
+            articleTime: { type: 'text', selector: '.time' },
+          },
+        },
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = response.body.data
+    expect(data.ok).toBe(true)
+    expect(data.links[0]).toMatchObject({
+      title: '第一篇报道：城市更新',
+      articleTime: '2026-01-01 09:00',
+    })
   })
 
   it('支持页码分页配置（query）且不因未实现的分页类型静默通过', async () => {
@@ -218,12 +247,11 @@ describe('POST /api/tester/detail', () => {
     // 管道产出的完整文章数据可用于正式采集落库
     const article = data.article
     expect(article.title).toBe('第二篇报道：轨道交通')
-    expect(article.html).toContain('新线路进入试运行阶段')
-    expect(article.html).not.toContain('广告位')
-    expect(article.html).not.toContain('<script')
-    expect(article.html).toContain(`${fixture.origin}/images/2.png`)
-    expect(article.images).toContain(`${fixture.origin}/images/2.png`)
-    expect(article.contentHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(article.content).toContain('新线路进入试运行阶段')
+    expect(article.content).not.toContain('广告位')
+    expect(article.content).not.toContain('<script')
+    // 正文图片不再单独输出，映射的 images 字段作为自定义字段进 metadata
+    expect(article.metadata.images).toContain('/images/2.png')
   })
 
   it('必填字段缺失时 ok:false，并列出缺失字段', async () => {
@@ -251,56 +279,6 @@ describe('POST /api/tester/detail', () => {
       body: JSON.stringify({ url: `${fixture.origin}/article/1`, fields: {} }),
     })
     expect(response.status).toBe(400)
-  })
-})
-
-/* -------------------------------------------------------------------------- */
-/* Selector 校验                                                               */
-/* -------------------------------------------------------------------------- */
-
-describe('POST /api/tester/selector', () => {
-  it('唯一 / 多匹配 / 无匹配（在真实文档中验证，不靠字符串猜测）', async () => {
-    const cases = [
-      { url: `${fixture.origin}/article/1`, selector: '.article-title', matchCount: 1, unique: true },
-      { url: `${fixture.origin}/news`, selector: '.news-item', matchCount: 7, unique: false },
-      { url: `${fixture.origin}/news`, selector: '.no-such-thing', matchCount: 0, unique: false },
-    ]
-
-    for (const item of cases) {
-      const response = await call(app, '/api/tester/selector', {
-        method: 'POST',
-        body: JSON.stringify({ url: item.url, selector: item.selector }),
-      })
-      expect(response.status).toBe(200)
-      expect(response.body.data.ok).toBe(true)
-      expect(response.body.data.matchCount).toBe(item.matchCount)
-      expect(response.body.data.unique).toBe(item.unique)
-    }
-  })
-
-  it('支持 XPath 校验（使用与解析引擎相同的适配器）', async () => {
-    const response = await call(app, '/api/tester/selector', {
-      method: 'POST',
-      body: JSON.stringify({
-        url: `${fixture.origin}/article/1`,
-        selector: '//h1[@class="article-title"]',
-        selectorType: 'xpath',
-      }),
-    })
-
-    expect(response.status).toBe(200)
-    expect(response.body.data.matchCount).toBe(1)
-    expect(response.body.data.unique).toBe(true)
-  })
-
-  it('非法选择器语法返回 ok:false', async () => {
-    const response = await call(app, '/api/tester/selector', {
-      method: 'POST',
-      body: JSON.stringify({ url: `${fixture.origin}/news`, selector: 'div[' }),
-    })
-    expect(response.status).toBe(200)
-    expect(response.body.data.ok).toBe(false)
-    expect(response.body.data.matchCount).toBe(0)
   })
 })
 

@@ -94,7 +94,7 @@ export function buildOverview(days = 14): StatsOverviewDto {
   const sinceIso = start.toISOString()
 
   const articleByDay = groupByDay(
-    "SELECT date(crawlTime, 'localtime') AS day, COUNT(*) AS count FROM article WHERE crawlTime IS NOT NULL AND crawlTime >= ? GROUP BY day",
+    "SELECT date(createdAt, 'localtime') AS day, COUNT(*) AS count FROM article WHERE createdAt IS NOT NULL AND createdAt >= ? GROUP BY day",
     sinceIso,
   )
   const completedByDay = groupByDay(
@@ -129,7 +129,7 @@ export function buildOverview(days = 14): StatsOverviewDto {
     },
     today: {
       articles: scalar(
-        "SELECT COUNT(*) AS value FROM article WHERE crawlTime IS NOT NULL AND date(crawlTime, 'localtime') = date('now', 'localtime')",
+        "SELECT COUNT(*) AS value FROM article WHERE date(createdAt, 'localtime') = date('now', 'localtime')",
       ),
       tasks: scalar(
         "SELECT COUNT(*) AS value FROM crawl_task WHERE date(createdAt, 'localtime') = date('now', 'localtime')",

@@ -2,23 +2,24 @@ import type { RequestClient } from '../../request/index.js'
 import { jsonOk } from '../lib/response.js'
 import { parseBody } from '../lib/validation.js'
 import {
-  checkSelector,
   fetchPageSnapshot,
   listTestBodySchema,
   detailTestBodySchema,
   ruleValidateBodySchema,
-  selectorCheckBodySchema,
   snapshotBodySchema,
   testAdhocDetail,
   testAdhocList,
   validateRuleInput,
 } from '../services/tester-service.js'
 import type { ApiRoute } from './types.js'
+import type { PluginRegistry } from '../../plugin-system/index.js'
 
 /** 测试器路由依赖：与站点/规则路由相同的请求运行时。 */
 export interface TesterRouteDeps {
   request: RequestClient
   allowPrivateNetwork: boolean
+  /** 插件注册表：测试请求带 parserPlugins 时执行真实插件链 */
+  pluginRegistry?: PluginRegistry
 }
 
 /**
@@ -28,7 +29,11 @@ export interface TesterRouteDeps {
  * 由 Service 复用统一请求层与采集核心执行，超时 / 大小限制 / SSRF 在其中继承。
  */
 export function testerRoutes(deps: TesterRouteDeps): ApiRoute[] {
-  const runtime = { request: deps.request, allowPrivateNetwork: deps.allowPrivateNetwork }
+  const runtime = {
+    request: deps.request,
+    allowPrivateNetwork: deps.allowPrivateNetwork,
+    ...(deps.pluginRegistry ? { pluginRegistry: deps.pluginRegistry } : {}),
+  }
 
   return [
     {
@@ -53,14 +58,6 @@ export function testerRoutes(deps: TesterRouteDeps): ApiRoute[] {
       handler: async (event) => {
         const input = await parseBody(event, detailTestBodySchema)
         return jsonOk(event, await testAdhocDetail(input, runtime))
-      },
-    },
-    {
-      method: 'POST',
-      path: '/api/tester/selector',
-      handler: async (event) => {
-        const input = await parseBody(event, selectorCheckBodySchema)
-        return jsonOk(event, await checkSelector(input, runtime))
       },
     },
     {

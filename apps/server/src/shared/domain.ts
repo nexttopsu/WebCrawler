@@ -71,7 +71,6 @@ export type CrawlTaskType = (typeof CrawlTaskType)[keyof typeof CrawlTaskType]
 /**
  * 文章详情采集状态。
  *
- * 与管理侧的 `ArticleStatus`（pending / published / ignored）互相独立：
  * `detailStatus` 只回答「这篇文章的详情页抓过了没有」。
  */
 export const ArticleDetailStatus = {
@@ -100,14 +99,6 @@ export const LogLevel = {
   ERROR: 'error',
 } as const
 export type LogLevel = (typeof LogLevel)[keyof typeof LogLevel]
-
-/** 文章状态。 */
-export const ArticleStatus = {
-  PENDING: 'pending',
-  PUBLISHED: 'published',
-  IGNORED: 'ignored',
-} as const
-export type ArticleStatus = (typeof ArticleStatus)[keyof typeof ArticleStatus]
 
 /** 代理状态。 */
 export const ProxyStatus = {

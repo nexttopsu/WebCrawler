@@ -25,10 +25,10 @@ export interface TesterDraft {
   /** 列表模式配置 */
   list: {
     itemSelector: string
-    linkSelector: string
-    titleSelector: string
-    coverSelector: string
-    coverAttribute: string
+    /** 列表阶段的解析器插件链（与详情阶段的顶层 parserPlugins 互不影响） */
+    parserPlugins: string[]
+    /** 列表阶段排除选择器：字段提取前先删除命中的节点（优先级最高，可不填） */
+    excludeSelectors: string[]
     /** 列表字段配置（推荐写法）：title / url 必填，其余自定义 */
     listFields: TesterFieldDraft[]
     paginationType: 'none' | 'query' | 'path' | 'next' | 'cursor'
@@ -39,6 +39,10 @@ export interface TesterDraft {
   }
   /** 详情字段配置（与 Rule Schema 的 FieldRule 一致） */
   fields: TesterFieldDraft[]
+  /** 详情阶段的解析器插件链（写入规则顶层 parserPlugins，与列表互不影响） */
+  parserPlugins: string[]
+  /** 详情阶段排除选择器：字段提取前先删除命中的节点（优先级最高，可不填） */
+  excludeSelectors: string[]
 }
 
 export interface TesterFieldDraft {
@@ -76,10 +80,8 @@ export function createEmptyDraft(): TesterDraft {
     proxyId: null,
     list: {
       itemSelector: '',
-      linkSelector: '',
-      titleSelector: '',
-      coverSelector: '',
-      coverAttribute: '',
+      parserPlugins: [],
+      excludeSelectors: [],
       listFields: [],
       paginationType: 'none',
       paginationParameter: 'page',
@@ -87,6 +89,8 @@ export function createEmptyDraft(): TesterDraft {
       maxPages: null,
     },
     fields: [],
+    parserPlugins: [],
+    excludeSelectors: [],
   }
 }
 
@@ -110,6 +114,13 @@ export function loadTesterDraft(): TesterDraft | null {
           : [],
       },
       fields: parsed.fields,
+      // 旧草稿没有 parserPlugins 字段（undefined），按空数组处理
+      parserPlugins: Array.isArray(parsed.parserPlugins)
+        ? parsed.parserPlugins.filter((name): name is string => typeof name === 'string')
+        : [],
+      excludeSelectors: Array.isArray(parsed.excludeSelectors)
+        ? parsed.excludeSelectors.filter((name): name is string => typeof name === 'string')
+        : [],
     }
   } catch {
     // 草稿损坏不应阻塞页面

@@ -19,6 +19,7 @@ import {
   type Field as RpField,
   type Schema as RpSchema,
 } from 'request-pack'
+import * as cheerio from 'cheerio'
 import type { FieldRule, ValidateConfig } from '../../shared/index.js'
 import { cleanText } from '../clean.js'
 import { parseDocument, type HtmlDocument, type MatchedNode } from './document.js'
@@ -26,6 +27,30 @@ import { extractFields as legacyExtractFields, type ExtractionResult, type Field
 
 /** request-pack 的 object 组合器不接受泛型参数以外的形状，这里统一收窄。 */
 type RpSchemaField = RpField
+
+/**
+ * 提取前从页面删除指定 CSS 选择器命中的节点（排除规则，优先级最高）。
+ *
+ * 用于先移除混淆 / 广告节点再做字段提取。未配置或 HTML 为空时原样返回；
+ * 单个选择器非法时跳过该条，不影响其余排除项。
+ */
+export function stripElements(html: string, selectors: readonly string[]): string {
+  const trimmed = selectors.map((selector) => selector.trim()).filter(Boolean)
+  if (trimmed.length === 0 || !html) return html
+  try {
+    const $ = cheerio.load(html)
+    for (const selector of trimmed) {
+      try {
+        $(selector).remove()
+      } catch {
+        // 无效选择器：跳过，不中断其余排除项
+      }
+    }
+    return $.html()
+  } catch {
+    return html
+  }
+}
 
 /** 判断字段能否编译成 request-pack schema（CSS + 内置组合器可表达的子集）。 */
 function isRpCompatible(rule: FieldRule): boolean {

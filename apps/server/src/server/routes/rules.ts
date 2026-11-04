@@ -1,5 +1,6 @@
 import { getQuery, setHeader } from 'h3'
 import type { RequestClient } from '../../request/index.js'
+import type { PluginRegistry } from '../../plugin-system/index.js'
 import { z } from 'zod'
 import { jsonOk } from '../lib/response.js'
 import { parseBody, parseIdParam, parseOptionalBody, parseQuery } from '../lib/validation.js'
@@ -26,6 +27,8 @@ import type { ApiRoute } from './types.js'
 export interface RuleRouteDeps {
   request: RequestClient
   allowPrivateNetwork: boolean
+  /** 插件注册表：规则配置 parserPlugins 时，试抓也执行真实插件链 */
+  pluginRegistry?: PluginRegistry
 }
 
 /** 规则试抓的可选请求体：允许临时换一个列表地址，不写入规则。 */
@@ -123,7 +126,11 @@ export function ruleRoutes(deps: RuleRouteDeps): ApiRoute[] {
           event,
           await testRuleListing(
             id,
-            { request: deps.request, allowPrivateNetwork: deps.allowPrivateNetwork },
+            {
+              request: deps.request,
+              allowPrivateNetwork: deps.allowPrivateNetwork,
+              ...(deps.pluginRegistry ? { pluginRegistry: deps.pluginRegistry } : {}),
+            },
             body?.url,
           ),
         )

@@ -300,8 +300,9 @@ pnpm --filter @webcrawler/core demo:crawl
 - `selectorType`：`css`（默认）或 `xpath`。XPath 使用独立适配器，不做字符串替换伪装。
 - `jsonPath`：JSON 响应使用，如 `data.items[*].url`。
 - `required` / `defaultValue` / `multiple` / `clean`：必填、兜底、多值与字段级清洗。
-- 标准字段：`title` / `author` / `publishTime` / `content` / `html` / `images` / `cover`（或 `coverUrl`）；
+- 标准字段：`title` / `url` / `author` / `summary` / `content` / `coverUrl` / `articleTime`——列表规则与详情规则共用同一套内置字段；
   其余字段名进入文章的 `extra` 扩展 JSON。封面图是**预留字段且允许为空**：规则没映射、页面没有或地址不是 http(s) 时为 `null`。
+  旧规则里的 `cover` / `publishTime` 仍可读取，分别等价于 `coverUrl` / `articleTime`。
 - 字段名需匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，嵌套深度上限 8 层（防止递归爆栈）。
 - `detail.fields` 与顶层 `fields` 不允许同时出现；`request.mode=http` 与 `browser.enabled=true` 互斥，冲突时报错而不是「后者静默生效」。
 
@@ -593,7 +594,7 @@ pnpm --filter @webcrawler/server start        # 或 node apps/server/dist/index.
 - 快照 HTML 上限 3 MB、字符数上限 200 万，超出会截断并标注；列表预览最多返回 20 条链接。
 - 任务队列在内存中：进程崩溃时排队的任务靠「重启扫描 `pending`」重新入队，队列顺序不保证与崩溃前一致。
 - 任务执行是单进程内的并发控制；多实例部署需要外部分布式锁，当前未实现（SQLite 也是单写者）。
-- 增量过滤依赖文章表已有的 `crawlTime` / `publishedAt`，历史脏数据（发布时间解析失败）会被当作「新文章」重新采集。
+- 增量过滤依赖文章表的 `articleTime` / `createdAt`，历史脏数据（文章时间解析失败）会被当作「新文章」重新采集。
 - 代理使用统计是 5s 批量落盘，进程被强杀会丢失最后几秒的计数。
 - 前端按路由懒加载，但 Element Plus 与 ECharts 让首屏主包仍在 1 MB 左右（gzip 约 330 KB）；内网后台可接受，公网部署建议再做组件级按需引入。
 - 插件只登记清单，不加载 `entry` 指向的代码：`plugin.json` 里的 `entry` 仅作记录，第三方插件运行需要另外的加载器。

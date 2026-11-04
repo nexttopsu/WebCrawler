@@ -105,10 +105,14 @@ function hostnameOf(url: string): string {
   }
 }
 
-/** 规则里配置的 parserPlugins → 依次执行的插件链运行器。 */
-function createParserPluginRunner(registry: PluginRegistry): ParserPluginRunner {
+/** 规则里配置的 parserPlugins → 依次执行的插件链运行器（列表与详情阶段共用）。 */
+export function createParserPluginRunner(registry: PluginRegistry): ParserPluginRunner {
   return async (data, context, source) => {
-    const names = context.rule.config.parserPlugins ?? []
+    // 名单按阶段取：列表用 list.parserPlugins，详情用顶层 parserPlugins，互不影响
+    const names =
+      source.stage === 'list'
+        ? (context.rule.config.list?.parserPlugins ?? [])
+        : (context.rule.config.parserPlugins ?? [])
     let current = data
     for (const name of names) {
       const plugin = registry.getParserPlugin(name)
@@ -119,7 +123,7 @@ function createParserPluginRunner(registry: PluginRegistry): ParserPluginRunner 
         data: current,
         html: source.html,
         url: source.url,
-        stage: 'detail',
+        stage: source.stage,
       })
     }
     return current
@@ -379,7 +383,6 @@ export class TaskExecutor {
               signal,
               logger,
               retries: options.retries ?? 1,
-              dedupeByContentHash: options.dedupeByContentHash !== false,
               publishedAfter: options.publishedAfter,
               publishedBefore: options.publishedBefore,
             })
@@ -474,7 +477,6 @@ export class TaskExecutor {
     signal: AbortSignal
     logger: CrawlLogger
     retries: number
-    dedupeByContentHash: boolean
     publishedAfter?: string
     publishedBefore?: string
   }): Promise<{ status: 'success' | 'skipped' | 'failed'; reason: string }> {
@@ -525,9 +527,8 @@ export class TaskExecutor {
             rawHtml: page.html,
           },
           {
-            dedupeByContentHash: input.dedupeByContentHash,
-            ...(input.publishedAfter ? { publishedAfter: input.publishedAfter } : {}),
-            ...(input.publishedBefore ? { publishedBefore: input.publishedBefore } : {}),
+            ...(input.publishedAfter ? { articleTimeAfter: input.publishedAfter } : {}),
+            ...(input.publishedBefore ? { articleTimeBefore: input.publishedBefore } : {}),
           },
         )
 
@@ -707,6 +708,11 @@ export class TaskExecutor {
             title: link.title ?? '',
             url: link.url,
             coverUrl: link.coverUrl ?? null,
+            // 列表阶段抽到的内置字段直接入库；详情阶段抽不到时由合并逻辑保留
+            ...(link.author ? { author: link.author } : {}),
+            ...(link.summary ? { summary: link.summary } : {}),
+            ...(link.content ? { content: link.content } : {}),
+            ...(link.articleTime ? { articleTime: link.articleTime } : {}),
             ...(link.metadata ? { extra: link.metadata } : {}),
           })
 
@@ -756,7 +762,6 @@ export class TaskExecutor {
     loggerOf: (category: TaskCategorySnapshot) => CrawlLogger
   }): Promise<void> {
     const { taskId, snapshot, stats, checkpoint, processed, completedCategories, flush, errors } = input
-    const dedupeByContentHash = input.options.dedupeByContentHash !== false
 
     for (const target of input.targets) {
       if (input.aborted()) break
@@ -800,7 +805,6 @@ export class TaskExecutor {
             signal: input.signal,
             logger,
             retries: input.options.retries ?? 1,
-            dedupeByContentHash,
           })
 
           processed.add(normalized)
@@ -835,7 +839,6 @@ export class TaskExecutor {
     signal: AbortSignal
     logger: CrawlLogger
     retries: number
-    dedupeByContentHash: boolean
   }): Promise<{ status: 'success' | 'failed'; reason: string }> {
     const { taskId, snapshot, category, link, proxy, categoryKey, limiter, engine, signal } = input
     const attempts = Math.max(1, (input.retries ?? 0) + 1)
@@ -854,7 +857,7 @@ export class TaskExecutor {
 
         if (!result.article) {
           const message = result.errors.join('；') || '数据校验未通过'
-          markArticleDetailFailed(link.url, message)
+          markArticleDetailFailed(link.url)
           writeLog({
             taskId,
             siteId: snapshot.siteId,
@@ -875,19 +878,6 @@ export class TaskExecutor {
           taskId,
           rawHtml: page.html,
         })
-
-        if (outcome.status === 'skipped') {
-          writeLog({
-            taskId,
-            siteId: snapshot.siteId,
-            categoryId: category.categoryId,
-            url: link.url,
-            level: 'debug',
-            stage: 'save',
-            message: `详情补采跳过：${outcome.reason ?? '内容未变化'}`,
-            detail: { articleId: input.articleId },
-          })
-        }
         return { status: 'success', reason: outcome.reason ?? '' }
       } catch (error) {
         if (signal.aborted) {
@@ -909,7 +899,7 @@ export class TaskExecutor {
     }
 
     const message = lastError?.message ?? '未知错误'
-    markArticleDetailFailed(link.url, message)
+    markArticleDetailFailed(link.url)
     writeLog({
       taskId,
       siteId: snapshot.siteId,

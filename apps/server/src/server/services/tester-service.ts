@@ -12,6 +12,8 @@
  */
 import type { ProxyRow } from '../../database/index.js'
 import { CrawlEngine, ParserError, cleanHtml, createParser } from '../../core/index.js'
+import type { PluginRegistry } from '../../plugin-system/index.js'
+import { createParserPluginRunner } from './task-executor.js'
 import {
   createBrowserClient,
   RequestError,
@@ -35,8 +37,6 @@ import type {
   DetailTestRequestBody,
   ProxySettings,
   RuleValidationDto,
-  SelectorCheckDto,
-  SelectorCheckRequestBody,
   SnapshotRequestBody,
   TesterDetailResultDto,
   TesterFieldResultDto,
@@ -51,6 +51,8 @@ export interface TesterRuntime {
   request: RequestClient
   /** 本地 fixture 测试时为 true；生产环境保持 false */
   allowPrivateNetwork: boolean
+  /** 插件注册表：规则配置 parserPlugins 时，测试也走真实插件链 */
+  pluginRegistry?: PluginRegistry
 }
 
 /** 默认测试超时，可通过请求体缩短，上限 60 秒。 */
@@ -108,6 +110,10 @@ export const listTestBodySchema = testerBaseSchema.extend({
       titleSelector: z.string().trim().max(500).optional(),
       coverSelector: z.string().trim().max(500).optional(),
       coverAttribute: z.string().trim().max(64).optional(),
+      /** 列表阶段的解析器插件链 */
+      parserPlugins: z.array(z.string().trim().min(1).max(64)).max(10).optional(),
+      /** 列表阶段排除选择器：提取前先删除命中的节点 */
+      excludeSelectors: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
     })
     .strict(),
   pagination: paginationSchema.optional(),
@@ -115,13 +121,11 @@ export const listTestBodySchema = testerBaseSchema.extend({
 
 export const detailTestBodySchema = testerBaseSchema.extend({
   fields: z.record(z.string(), fieldRuleSchema),
+  /** 详情阶段排除选择器：提取前先删除命中的节点 */
+  excludeSelectors: z.array(z.string().trim().min(1).max(500)).max(20).optional(),
   clean: z.object({ removeSelectors: z.array(z.string().max(500)).max(50).optional() }).strict().optional(),
   validate: z.object({ minContentLength: z.number().int().min(0).optional() }).strict().optional(),
-})
-
-export const selectorCheckBodySchema = testerBaseSchema.extend({
-  selector: z.string().trim().min(1, '选择器必填').max(500),
-  selectorType: z.enum(['css', 'xpath']).optional(),
+  parserPlugins: z.array(z.string().trim().min(1).max(64)).max(10).optional(),
 })
 
 export const ruleValidateBodySchema = z
@@ -217,7 +221,14 @@ async function withBrowser<T>(
       timeoutMs: TESTER_TIMEOUT_MAX_MS,
     })
   }
-  const engine = new CrawlEngine({ request: runtime.request, browser })
+  const engine = new CrawlEngine({
+    request: runtime.request,
+    browser,
+    // 解析器插件链与正式采集同一实现（列表与详情阶段都执行）
+    parserPluginRunner: runtime.pluginRegistry
+      ? createParserPluginRunner(runtime.pluginRegistry)
+      : undefined,
+  })
   try {
     return await run(engine)
   } finally {
@@ -341,6 +352,12 @@ export async function testAdhocList(
       ...(input.list.titleSelector ? { titleSelector: input.list.titleSelector } : {}),
       ...(input.list.coverSelector ? { coverSelector: input.list.coverSelector } : {}),
       ...(input.list.coverAttribute ? { coverAttribute: input.list.coverAttribute } : {}),
+      ...(input.list.parserPlugins && input.list.parserPlugins.length > 0
+        ? { parserPlugins: input.list.parserPlugins }
+        : {}),
+      ...(input.list.excludeSelectors && input.list.excludeSelectors.length > 0
+        ? { excludeSelectors: input.list.excludeSelectors }
+        : {}),
     },
     ...(input.pagination ? { pagination: input.pagination } : {}),
   }
@@ -355,6 +372,10 @@ export async function testAdhocList(
       url: link.url,
       title: link.title ?? null,
       coverUrl: link.coverUrl ?? null,
+      // 列表阶段的内置字段：让配置者一眼确认选择器是否命中
+      author: link.author ?? null,
+      summary: link.summary ?? null,
+      articleTime: link.articleTime ?? null,
     }))
 
     return {
@@ -413,6 +434,9 @@ export async function testAdhocDetail(
     fields: input.fields as Record<string, FieldRule>,
     ...(input.clean ? { clean: input.clean } : {}),
     ...(input.validate ? { validate: input.validate } : {}),
+    ...(input.parserPlugins && input.parserPlugins.length > 0
+      ? { parserPlugins: input.parserPlugins }
+      : {}),
   }
 
   const proxy = resolveProxySetting(input.proxyId)
@@ -476,54 +500,6 @@ export async function testAdhocDetail(
       missing: [],
       errors: [describeError(error)],
       article: null,
-      message: describeError(error),
-    }
-  }
-}
-
-/* -------------------------------------------------------------------------- */
-/* Selector 校验                                                               */
-/* -------------------------------------------------------------------------- */
-
-/** 在真实文档中验证 Selector 的匹配数量（与解析引擎同一适配器）。 */
-export async function checkSelector(
-  input: SelectorCheckRequestBody,
-  runtime: TesterRuntime,
-): Promise<SelectorCheckDto> {
-  const mode = resolveMode(input)
-  const selectorType = input.selectorType ?? 'css'
-  const proxy = resolveProxySetting(input.proxyId)
-  const context = buildTestContext(input, { version: 1 }, proxy)
-
-  try {
-    const page = await withBrowser(mode, runtime, async (engine) => {
-      const fetched = await engine.fetchPage(context)
-      return { fetched, count: engine.services.parser.count(fetched.html, input.selector, selectorType) }
-    })
-    const count = page.count
-    return {
-      ok: true,
-      selector: input.selector,
-      selectorType,
-      matchCount: count,
-      unique: count === 1,
-      exists: count > 0,
-      message:
-        count === 0
-          ? '没有命中任何节点'
-          : count === 1
-            ? '唯一匹配'
-            : `命中 ${count} 个节点（多匹配）`,
-    }
-  } catch (error) {
-    if (error instanceof AppError) throw error
-    return {
-      ok: false,
-      selector: input.selector,
-      selectorType,
-      matchCount: 0,
-      unique: false,
-      exists: false,
       message: describeError(error),
     }
   }

@@ -150,12 +150,11 @@ interface CrawlContext {
 {
   siteId: string; categoryId: string;
   title: string; url: string;
-  author?: string; publishTime?: string;
-  content?: string;   // 纯文本正文
-  html?: string;      // 清洗后的正文 HTML
-  images: string[];   // 正文图片绝对地址，按出现顺序去重
-  contentHash?: string;
-  crawlTime: string;  // ISO 8601
+  author?: string;
+  articleTime?: string; // 原站点发布时间（原始字符串，入库前统一转 ISO 8601）
+  summary?: string;     // 未给时由入库层按正文自动生成
+  content?: string;     // 纯文本正文
+  coverUrl?: string | null;
   metadata?: Record<string, unknown>;
 }
 ```

@@ -51,6 +51,10 @@ export interface ListTestRequestBody extends TesterRequestBase {
     titleSelector?: string
     coverSelector?: string
     coverAttribute?: string
+    /** 列表阶段的解析器插件链：列表提取完成后按顺序重格式化（与保存的规则同构） */
+    parserPlugins?: string[]
+    /** 列表阶段排除选择器：提取前先删除命中的节点（与保存的规则同构） */
+    excludeSelectors?: string[]
   }
   pagination?: PaginationConfig
 }
@@ -58,14 +62,12 @@ export interface ListTestRequestBody extends TesterRequestBase {
 /** 详情规则测试请求：字段映射即 `CrawlRuleConfig.fields`。 */
 export interface DetailTestRequestBody extends TesterRequestBase {
   fields: Record<string, FieldRule>
+  /** 详情阶段排除选择器：提取前先删除命中的节点（与保存的规则同构） */
+  excludeSelectors?: string[]
   clean?: { removeSelectors?: string[] }
   validate?: { minContentLength?: number }
-}
-
-/** Selector 校验请求。 */
-export interface SelectorCheckRequestBody extends TesterRequestBase {
-  selector: string
-  selectorType?: 'css' | 'xpath'
+  /** 解析器插件链：详情提取完成后按顺序重格式化（与保存的规则同构） */
+  parserPlugins?: string[]
 }
 
 /* -------------------------------------------------------------------------- */
@@ -88,20 +90,6 @@ export interface PageSnapshotDto {
   message: string
 }
 
-/** Selector 校验结果：匹配数量必须在真实文档中验证，不能靠字符串猜测。 */
-export interface SelectorCheckDto {
-  ok: boolean
-  selector: string
-  selectorType: 'css' | 'xpath'
-  /** 命中节点数 */
-  matchCount: number
-  /** 恰好命中 1 个节点 */
-  unique: boolean
-  /** 命中 ≥1 个节点 */
-  exists: boolean
-  message: string
-}
-
 /** 列表规则测试结果（与正式采集同一引擎 `CrawlEngine.listPage`）。 */
 export interface TesterListResultDto {
   ok: boolean
@@ -117,7 +105,15 @@ export interface TesterListResultDto {
   /** 因重复被丢弃的链接数 */
   duplicateCount: number
   /** 预览链接（最多 20 条） */
-  links: Array<{ url: string; title: string | null; coverUrl?: string | null }>
+  links: Array<{
+    url: string
+    title: string | null
+    coverUrl?: string | null
+    /** 列表阶段抽到的作者 / 摘要 / 文章时间，用于确认内置字段选择器是否命中 */
+    author?: string | null
+    summary?: string | null
+    articleTime?: string | null
+  }>
   message: string
 }
 

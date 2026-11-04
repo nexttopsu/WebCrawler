@@ -1,5 +1,7 @@
 import type { CategoryRow, CrawlRuleRow, SiteRow } from '../../database/index.js'
 import { CrawlEngine, ParserError } from '../../core/index.js'
+import type { PluginRegistry } from '../../plugin-system/index.js'
+import { createParserPluginRunner } from './task-executor.js'
 import {
   createBrowserClient,
   RequestError,
@@ -23,6 +25,8 @@ export interface TestRuntime {
   request: RequestClient
   /** 本地 fixture 测试时为 true；生产环境保持 false */
   allowPrivateNetwork: boolean
+  /** 插件注册表：规则配置 parserPlugins 时，试抓也执行真实插件链 */
+  pluginRegistry?: PluginRegistry
 }
 
 /** 测试接口最多返回的链接数，避免把整页链接塞进响应。 */
@@ -123,7 +127,13 @@ async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promis
     })
   }
 
-  const engine = new CrawlEngine({ request: runtime.request, browser })
+  const engine = new CrawlEngine({
+    request: runtime.request,
+    browser,
+    parserPluginRunner: runtime.pluginRegistry
+      ? createParserPluginRunner(runtime.pluginRegistry)
+      : undefined,
+  })
   const startedAt = performance.now()
 
   try {

@@ -3,6 +3,7 @@ import { migration001InitialIndexes } from './001-initial-indexes.js'
 import { migration002Stage3Upgrade } from './002-stage3-upgrade.js'
 import { migration003Stage5Indexes } from './003-stage5-indexes.js'
 import { migration004ArticleDetailStatus } from './004-article-detail-status.js'
+import { migration005ArticleSimplify } from './005-article-simplify.js'
 import type { AppliedMigration, Migration } from './types.js'
 
 export type { AppliedMigration, Migration } from './types.js'
@@ -15,6 +16,7 @@ export const migrations: readonly Migration[] = [
   migration002Stage3Upgrade,
   migration003Stage5Indexes,
   migration004ArticleDetailStatus,
+  migration005ArticleSimplify,
 ]
 
 const CREATE_MIGRATIONS_TABLE = `

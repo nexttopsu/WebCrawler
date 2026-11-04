@@ -2,8 +2,7 @@
 /**
  * 文章详情。
  *
- * 正文以 HTML 渲染，但必须经过 `sanitizeHtml` 再进 `v-html`：
- * 服务端已经清洗过一次，这里做最后一道防线（历史数据 / 手工导入 / 插件输出）。
+ * 正文为采集到的纯文本；原始 HTML 来自 rawHtml（服务端原样返回，查看时只读）。
  */
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -13,13 +12,10 @@ import type { ArticleDto, ArticleRawDto } from '@webcrawler/shared'
 import { deleteArticle, getArticle, getArticleRaw } from '@/api/articles'
 import { errorMessage } from '@/api/client'
 import { useAsyncState } from '@/composables/useAsyncState'
-import { collectImages, sanitizeHtml } from '@/lib/sanitize'
 import PageHeader from '@/components/common/PageHeader.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import StatusTag from '@/components/common/StatusTag.vue'
-import { ARTICLE_STATUS_MAP } from '@/config/status'
 import CodeViewer from '@/components/common/CodeViewer.vue'
 import JsonViewer from '@/components/common/JsonViewer.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -29,8 +25,6 @@ const router = useRouter()
 
 const articleId = computed(() => Number(route.params.id))
 const article = useAsyncState<ArticleDto>(() => getArticle(articleId.value))
-
-const safeHtml = computed(() => sanitizeHtml(article.data.value?.contentHtml))
 
 /**
  * 页头副标题。
@@ -44,13 +38,7 @@ const headerDescription = computed(() => {
   return '加载中…'
 })
 
-const images = computed(() => {
-  const fromServer = article.data.value?.images ?? []
-  const fromHtml = collectImages(article.data.value?.contentHtml)
-  return Array.from(new Set([...fromServer, ...fromHtml]))
-})
-
-const tab = ref<'content' | 'text' | 'raw' | 'json' | 'images'>('content')
+const tab = ref<'content' | 'raw' | 'json'>('content')
 
 /* --------------------------------- 原始 HTML -------------------------------- */
 
@@ -71,7 +59,7 @@ async function loadRaw(): Promise<void> {
   }
 }
 
-function switchTab(value: 'content' | 'text' | 'raw' | 'json' | 'images'): void {
+function switchTab(value: 'content' | 'raw' | 'json'): void {
   tab.value = value
   if (value === 'raw') void loadRaw()
 }
@@ -112,7 +100,6 @@ const jsonValue = computed(() => {
     ...data,
     // 正文太长，JSON 视图里截断，完整内容看「正文」页签
     content: data.content ? `${data.content.slice(0, 2000)}${data.content.length > 2000 ? '…（已截断）' : ''}` : null,
-    contentHtml: undefined,
   }
 })
 </script>
@@ -143,20 +130,15 @@ const jsonValue = computed(() => {
     <template v-else-if="article.data.value">
       <section class="wb-card meta-card">
         <div class="meta-card__top">
-          <StatusTag :status="article.data.value.status" :map="ARTICLE_STATUS_MAP" />
-          <span class="wb-muted">采集于 {{ formatTime(article.data.value.crawlTime ?? article.data.value.createdAt) }}</span>
-          <span v-if="article.data.value.publishedAt" class="wb-muted">
-            发布于 {{ formatTime(article.data.value.publishedAt) }}
+          <span class="wb-muted">采集于 {{ formatTime(article.data.value.createdAt) }}</span>
+          <span v-if="article.data.value.articleTime" class="wb-muted">
+            文章时间 {{ formatTime(article.data.value.articleTime) }}
           </span>
         </div>
 
         <dl class="wb-kv meta-grid">
           <dt>作者</dt>
           <dd>{{ article.data.value.author || '—' }}</dd>
-          <dt>字数</dt>
-          <dd>{{ article.data.value.wordCount }}</dd>
-          <dt>图片</dt>
-          <dd>{{ article.data.value.imageCount }}</dd>
           <dt>原文</dt>
           <dd>
             <a class="wb-link" :href="article.data.value.url" target="_blank" rel="noopener noreferrer">
@@ -174,8 +156,6 @@ const jsonValue = computed(() => {
           <button
             v-for="item in [
               { key: 'content', label: '正文' },
-              { key: 'text', label: '纯文本' },
-              { key: 'images', label: `图片（${images.length}）` },
               { key: 'raw', label: '原始 HTML' },
               { key: 'json', label: 'JSON' },
             ]"
@@ -183,35 +163,15 @@ const jsonValue = computed(() => {
             type="button"
             class="tab-bar__item"
             :class="{ 'is-active': tab === item.key }"
-            @click="switchTab(item.key as 'content' | 'text' | 'raw' | 'json' | 'images')"
+            @click="switchTab(item.key as 'content' | 'raw' | 'json')"
           >
             {{ item.label }}
           </button>
         </div>
 
         <div v-show="tab === 'content'" class="tab-panel">
-          <div v-if="safeHtml" class="wb-article" v-html="safeHtml" />
-          <EmptyState v-else compact title="没有正文 HTML" description="该文章的规则可能只配置了纯文本提取" />
-        </div>
-
-        <div v-show="tab === 'text'" class="tab-panel">
           <pre v-if="article.data.value.content" class="wb-code article-text">{{ article.data.value.content }}</pre>
-          <EmptyState v-else compact title="没有纯文本正文" />
-        </div>
-
-        <div v-show="tab === 'images'" class="tab-panel">
-          <div v-if="images.length" class="image-grid">
-            <el-image
-              v-for="src in images"
-              :key="src"
-              :src="src"
-              :preview-src-list="images"
-              fit="cover"
-              lazy
-              class="image-grid__item"
-            />
-          </div>
-          <EmptyState v-else compact title="没有图片" description="正文中未发现可用的图片地址" />
+          <EmptyState v-else compact title="没有正文内容" />
         </div>
 
         <div v-show="tab === 'raw'" class="tab-panel">
@@ -341,20 +301,5 @@ const jsonValue = computed(() => {
   max-height: 620px;
   overflow: auto;
   padding: 14px 16px;
-}
-
-.image-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
-}
-
-.image-grid__item {
-  width: 100%;
-  height: 120px;
-  border-radius: var(--wb-radius-sm);
-  border: 1px solid var(--wb-border);
-  background: var(--wb-surface-muted);
-  cursor: zoom-in;
 }
 </style>

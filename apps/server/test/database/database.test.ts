@@ -39,12 +39,13 @@ describe('数据库初始化', () => {
   })
 
   it('执行基线迁移并记录版本', () => {
-    expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4])
+    expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4, 5])
     expect(context.migrations.map((item) => item.name)).toEqual([
       'initial-indexes',
       'stage3-site-category-rule',
       'stage5-task-schedule-indexes',
       'article-detail-status',
+      'article-simplify',
     ])
   })
 
@@ -201,7 +202,7 @@ describe('模型读写', () => {
     expect(crawlRuleVersion.count({ ruleId: rule.id })).toBe(1)
   })
 
-  it('文章按站点与发布时间查询', () => {
+  it('文章按站点与文章时间查询', () => {
     const { article } = getModels()
 
     article.createMany([
@@ -211,8 +212,7 @@ describe('模型读写', () => {
         taskId: 1,
         title: '第一篇',
         url: 'https://example.com/a/1',
-        publishedAt: '2026-01-01T08:00:00.000Z',
-        status: 'published',
+        articleTime: '2026-01-01T08:00:00.000Z',
       },
       {
         siteId: 1,
@@ -220,20 +220,18 @@ describe('模型读写', () => {
         taskId: 1,
         title: '第二篇',
         url: 'https://example.com/a/2',
-        publishedAt: '2026-01-02T08:00:00.000Z',
-        status: 'pending',
+        articleTime: '2026-01-02T08:00:00.000Z',
       },
     ])
 
     const latest = article.findMany(
       { siteId: 1 },
-      { orderBy: 'publishedAt', order: 'DESC', limit: 1 },
+      { orderBy: 'articleTime', order: 'DESC', limit: 1 },
     )
     expect(latest).toHaveLength(1)
     expect(latest[0]?.title).toBe('第二篇')
 
     expect(article.count({ siteId: 1 })).toBe(2)
-    expect(article.count({ siteId: 1, status: 'pending' })).toBe(1)
   })
 
   it('系统设置按键 upsert', () => {

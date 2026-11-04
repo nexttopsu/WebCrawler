@@ -47,13 +47,12 @@ export const migration001InitialIndexes: Migration = {
       CREATE INDEX IF NOT EXISTS ix_crawl_task_rule ON crawl_task (ruleId);
       CREATE INDEX IF NOT EXISTS ix_crawl_task_status ON crawl_task (status);
 
-      -- 文章：URL 唯一，列表页按发布时间倒序
+      -- 文章：URL 唯一，列表页按文章时间倒序
       CREATE UNIQUE INDEX IF NOT EXISTS ux_article_url ON article (url);
       CREATE INDEX IF NOT EXISTS ix_article_site ON article (siteId);
       CREATE INDEX IF NOT EXISTS ix_article_category ON article (categoryId);
       CREATE INDEX IF NOT EXISTS ix_article_task ON article (taskId);
-      CREATE INDEX IF NOT EXISTS ix_article_published_at ON article (publishedAt);
-      CREATE INDEX IF NOT EXISTS ix_article_status ON article (status);
+      CREATE INDEX IF NOT EXISTS ix_article_article_time ON article (articleTime);
 
       -- 代理：协议 + 主机 + 端口唯一
       CREATE UNIQUE INDEX IF NOT EXISTS ux_proxy_endpoint ON proxy (protocol, host, port);

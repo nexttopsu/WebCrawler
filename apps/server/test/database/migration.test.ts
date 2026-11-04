@@ -134,7 +134,7 @@ describe('第一阶段数据库升级', () => {
 
       const context = initDatabase({ file })
       try {
-        expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4])
+        expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4, 5])
 
         // 站点：url → baseUrl，remark → description，旧列被删除
         const siteColumns = columnsOf(file, 'site')
@@ -209,7 +209,7 @@ describe('第一阶段数据库升级', () => {
   it('全新数据库执行升级迁移是空操作', () => {
     const context = initDatabase({ file: ':memory:' })
     try {
-      expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4])
+      expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4, 5])
       expect(context.models.site.count()).toBe(0)
       // 全新建表后不应残留旧列
       const columns = context.db

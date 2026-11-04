@@ -91,6 +91,7 @@ export function createApp(options: CreateAppOptions = {}): H3 {
   const serviceDeps = {
     request,
     allowPrivateNetwork: config.allowPrivateNetwork,
+    pluginRegistry: registry,
     runtime: runtime.tasks,
     scheduler: runtime.scheduler,
     logger,

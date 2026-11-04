@@ -49,7 +49,6 @@ export const taskOptionsSchema = z
     publishedAfter: isoTimeField.optional(),
     publishedBefore: isoTimeField.optional(),
     incremental: z.boolean().optional(),
-    dedupeByContentHash: z.boolean().optional(),
     maxDurationMs: z.number().int().min(1_000).max(86_400_000).optional(),
     followPagination: z.boolean().optional(),
   })
@@ -416,7 +415,6 @@ function normalizeOptions(
     retries: defaults.retries,
     rateLimitMs: defaults.rateLimitMs,
     maxDurationMs: defaults.maxDurationMs,
-    dedupeByContentHash: true,
     followPagination: true,
     ...input,
     incremental,

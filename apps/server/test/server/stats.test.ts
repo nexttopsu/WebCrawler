@@ -46,21 +46,19 @@ describe('统计概览', () => {
       title: '今天的文章',
       url: 'https://example.com/a/1',
       content: '正文',
-      crawlTime: now,
-      publishedAt: now,
-      status: 'success',
     })
-    // 三天前的文章：不应计入今日，但应出现在趋势里（14 天窗口内）
+    // 三天前的文章：不应计入今日，但应出现在趋势里（14 天窗口内）。
+    // 文章统计现在按 createdAt 聚合，直接回写 createdAt 模拟历史数据。
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
-    getModels().article.create({
+    const old = getModels().article.create({
       siteId: site.id,
       title: '三天前的文章',
       url: 'https://example.com/a/2',
       content: '正文',
-      crawlTime: threeDaysAgo.toISOString(),
-      publishedAt: threeDaysAgo.toISOString(),
-      status: 'success',
     })
+    getDatabaseContext()
+      .db.prepare('UPDATE article SET createdAt = ? WHERE id = ?')
+      .run(threeDaysAgo.toISOString(), old.id)
 
     getModels().crawlTask.create({
       name: '已完成任务',

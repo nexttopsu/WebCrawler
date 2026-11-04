@@ -1,23 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { TesterFieldDraft } from '@/composables/useTesterDraft'
+import { ARTICLE_FIELD_PRESETS, type ArticleFieldPreset } from '@/config/article-fields'
 import { ArrowDown, ArrowUp, Plus, Trash2 } from '@lucide/vue'
 
-interface FieldPreset {
-  key: string
-  label: string
-  type: 'text' | 'html' | 'attr'
-  attribute?: string
-  multiple?: boolean
-  required?: boolean
-}
+type FieldPreset = ArticleFieldPreset
 
 const props = defineProps<{
   fields: TesterFieldDraft[]
   title: string
   subtitle?: string
-  /** 内置字段预设；缺省为详情字段的默认预设 */
+  /** 内置字段预设；缺省为列表 / 详情共用的文章字段 */
   builtIns?: FieldPreset[]
+  /** 该场景下必须勾选「必填」的内置字段 key（列表 title / url、详情 title） */
+  requiredKeys?: readonly string[]
 }>()
 
 const emit = defineEmits<{
@@ -30,23 +26,28 @@ const FIELD_TYPES = [
   { value: 'attr', label: 'attr（属性）' },
 ] as const
 
-/** 详情字段的默认内置预设。 */
-const DEFAULT_BUILT_INS: FieldPreset[] = [
-  { key: 'title', label: '标题', type: 'text', required: true },
-  { key: 'content', label: '正文', type: 'html', required: true },
-  { key: 'author', label: '作者', type: 'text' },
-  { key: 'publishTime', label: '发布时间', type: 'text' },
-  { key: 'images', label: '图片', type: 'attr', attribute: 'src', multiple: true },
-]
+const builtInFields = computed<FieldPreset[]>(() => props.builtIns ?? ARTICLE_FIELD_PRESETS)
 
-const builtInFields = computed<FieldPreset[]>(() => props.builtIns ?? DEFAULT_BUILT_INS)
+/** 已存在同名（含旧写法别名）字段时，内置项不再出现在下拉里。 */
+function hasField(key: string): boolean {
+  return props.fields.some((field) => field.key === key)
+}
+
+function isPresent(preset: FieldPreset): boolean {
+  if (hasField(preset.key)) return true
+  return (preset.aliases ?? []).some((alias) => hasField(alias))
+}
+
+function isRequired(preset: FieldPreset): boolean {
+  return (props.requiredKeys ?? []).includes(preset.key)
+}
 
 function cloneFields(): TesterFieldDraft[] {
   return props.fields.map((field) => ({ ...field }))
 }
 
 function addBuiltIn(key: string): void {
-  if (props.fields.some((field) => field.key === key)) return
+  if (hasField(key)) return
   const preset = builtInFields.value.find((item) => item.key === key)
   if (!preset) return
   emit('update:fields', [
@@ -57,8 +58,8 @@ function addBuiltIn(key: string): void {
       selector: '',
       type: preset.type,
       attribute: preset.attribute ?? '',
-      multiple: preset.multiple === true,
-      required: preset.required === true,
+      multiple: false,
+      required: isRequired(preset),
       defaultValue: '',
       trim: true,
       collapseWhitespace: false,
@@ -106,7 +107,7 @@ function moveField(index: number, offset: -1 | 1): void {
 }
 
 const availableBuiltIns = (): Array<{ key: string; label: string }> =>
-  builtInFields.value.filter((item) => !props.fields.some((field) => field.key === item.key)).map((item) => ({
+  builtInFields.value.filter((item) => !isPresent(item)).map((item) => ({
     key: item.key,
     label: `${item.label}（${item.key}）`,
   }))
@@ -134,7 +135,7 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
       </div>
     </div>
 
-    <p v-if="fields.length === 0" class="empty">尚未配置字段，请从内置字段开始，或在预览中点选元素。</p>
+    <p v-if="fields.length === 0" class="empty">尚未配置字段，请从「添加内置字段」开始或添加自定义字段。</p>
 
     <el-collapse v-else>
       <el-collapse-item v-for="(field, index) in fields" :key="field.key" :name="field.key">

@@ -18,6 +18,14 @@ export interface ArticleLink {
   title?: string
   /** 列表项上提取的封面图，已转为绝对地址；未配置 coverSelector 时为空 */
   coverUrl?: string
+  /** 列表阶段提取的作者；为空时留待详情阶段补采 */
+  author?: string
+  /** 列表阶段提取的摘要 */
+  summary?: string
+  /** 列表阶段提取的正文 */
+  content?: string
+  /** 列表阶段提取的文章时间（原始字符串，入库前统一转 ISO 8601） */
+  articleTime?: string
   /** 文章 URL，已转为绝对地址 */
   url: string
   /** 发现该链接的列表页 URL */
@@ -32,24 +40,18 @@ export interface ArticleData {
   title: string
   url: string
   author?: string
-  publishTime?: string
+  /** 文章时间：采集时标注的原站点发布时间（原始字符串，入库前统一转 ISO 8601） */
+  articleTime?: string
+  /** 摘要；未提取时由入库层按正文自动生成 */
+  summary?: string
   /** 纯文本正文 */
   content?: string
-  /** 清洗后的正文 HTML */
-  html?: string
-  /** 正文中出现的图片绝对地址，按出现顺序去重 */
-  images: string[]
   /**
    * 封面图绝对地址，预留给下游展示使用，**允许为空**。
    *
    * 规则里映射 `cover` / `coverUrl` 字段时取该值；没映射或页面上没有封面时为 `null`。
-   * 落库时若为 `null`，业务层会退化为正文首图（`images[0]`），仍没有则保持空。
    */
   coverUrl?: string | null
-  /** 正文内容哈希，用于去重 */
-  contentHash?: string
-  /** 采集时间（ISO 8601） */
-  crawlTime: string
   metadata?: Record<string, unknown>
 }
 
@@ -245,6 +247,16 @@ export interface ListRuleConfig {
   coverSelector?: string
   /** 封面图属性，默认 src（懒加载站点可配 data-src 等真实地址属性） */
   coverAttribute?: string
+  /**
+   * 列表阶段的解析器插件链：每个列表项字段提取完成后依次执行。
+   * 与顶层 `parserPlugins`（详情阶段）互不影响。
+   */
+  parserPlugins?: string[]
+  /**
+   * 列表阶段排除选择器：提取字段前先从页面删除命中的节点（混淆 / 广告等）。
+   * 优先级最高，先于字段提取与解析器插件执行；可不填。
+   */
+  excludeSelectors?: string[]
   pagination?: PaginationConfig
 }
 
@@ -341,10 +353,15 @@ export interface CrawlRuleConfig {
   detail?: DetailRuleConfig
   fields?: Record<string, FieldRule>
   /**
-   * 解析器插件链：在 html2object 提取完成之后、清洗入库之前依次执行，
-   * 用于重格式化数据（如图片地址解密）。按数组顺序调用。
+   * 详情阶段的解析器插件链：详情字段提取完成后依次执行，
+   * 用于重格式化数据（如图片地址解密）。与 `list.parserPlugins` 互不影响。
    */
   parserPlugins?: string[]
+  /**
+   * 详情阶段排除选择器：提取字段前先从页面删除命中的节点（混淆 / 广告等）。
+   * 优先级最高，先于字段提取与解析器插件执行；可不填。
+   */
+  excludeSelectors?: string[]
   clean?: ContentCleanRule
   validate?: ValidateConfig
   browser?: BrowserRuleConfig

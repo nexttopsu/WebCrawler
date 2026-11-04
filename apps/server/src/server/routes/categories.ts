@@ -1,5 +1,6 @@
 import { setHeader } from 'h3'
 import type { RequestClient } from '../../request/index.js'
+import type { PluginRegistry } from '../../plugin-system/index.js'
 import { jsonOk } from '../lib/response.js'
 import { parseBody, parseIdParam, parseQuery } from '../lib/validation.js'
 import {
@@ -21,6 +22,8 @@ import type { ApiRoute } from './types.js'
 export interface CategoryRouteDeps {
   request: RequestClient
   allowPrivateNetwork: boolean
+  /** 插件注册表：规则配置 parserPlugins 时，试抓也执行真实插件链 */
+  pluginRegistry?: PluginRegistry
 }
 
 /** 栏目管理 API。站点归属不可变更，其他字段支持 PUT 整体替换与 PATCH 局部更新。 */
@@ -88,6 +91,7 @@ export function categoryRoutes(deps: CategoryRouteDeps): ApiRoute[] {
           await testCategoryListing(id, {
             request: deps.request,
             allowPrivateNetwork: deps.allowPrivateNetwork,
+            ...(deps.pluginRegistry ? { pluginRegistry: deps.pluginRegistry } : {}),
           }),
         )
       },

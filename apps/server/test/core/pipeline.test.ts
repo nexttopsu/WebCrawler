@@ -20,7 +20,6 @@ const baseInput = {
   body: detailHtml,
   fields: detailFields,
   clean: { removeSelectors: ['.ad'] },
-  crawlTime: '2026-02-01T00:00:00.000Z',
 }
 
 describe('数据管道：完整流程', () => {
@@ -34,76 +33,23 @@ describe('数据管道：完整流程', () => {
     expect(article.categoryId).toBe('10')
     expect(article.title).toBe('第一篇报道：采集平台上线')
     expect(article.author).toBe('张三')
-    expect(article.publishTime).toBe('2026-01-01 10:00')
+    expect(article.articleTime).toBe('2026-01-01 10:00')
     expect(article.url).toBe('https://example.com/news/1.html')
-    expect(article.crawlTime).toBe('2026-02-01T00:00:00.000Z')
     expect(article.metadata).toMatchObject({ source: '本站' })
   })
 
-  it('正文同时给出清洗后的 HTML 与纯文本', async () => {
+  it('纯文本正文：清洗掉脚本与广告内容', async () => {
     const article = (await runPipeline(baseInput)).article!
 
-    expect(article.html).not.toContain('<script')
-    expect(article.html).not.toContain('onclick')
-    expect(article.html).not.toContain('javascript:')
-    expect(article.html).not.toContain('这里是广告')
     expect(article.content).toContain('第一段正文')
     expect(article.content).not.toContain('document.write')
-  })
-
-  it('图片转为绝对地址并去重', async () => {
-    const article = (await runPipeline(baseInput)).article!
-    expect(article.images).toEqual([
-      'https://example.com/images/a.png',
-      'https://cdn.example.com/b.png',
-    ])
-  })
-
-  it('正文 HTML 中的相对地址被改写为绝对地址', async () => {
-    const article = (await runPipeline(baseInput)).article!
-    expect(article.html).toContain('src="https://example.com/images/a.png"')
-    expect(article.html).not.toContain('src="/images/a.png"')
-  })
-
-  it('不带协议前缀的站内相对图片不会被清洗掉', async () => {
-    // 不少 CMS 存的是 `upload/2026/a.jpg` 这种没有前导斜杠的相对地址。
-    // 清洗阶段若按「不是 http(s) 就删掉」处理，图片和 images 列表会一起丢。
-    const article = (
-      await runPipeline({
-        ...baseInput,
-        body: `<html><body>
-        <h1 class="article-title">相对图片</h1>
-        <div class="article-content">
-          <p>正文内容足够长，用来通过最基础的正文长度校验。</p>
-          <img src="upload/20260101/a.jpg" alt="站内图" />
-        </div>
-      </body></html>`,
-      })
-    ).article!
-
-    expect(article.html).toContain('src="https://example.com/news/upload/20260101/a.jpg"')
-    expect(article.images).toEqual(['https://example.com/news/upload/20260101/a.jpg'])
+    expect(article.content).not.toContain('这里是广告')
   })
 
   it('纯文本正文保留段落换行且不夹带多余空格', async () => {
     const article = (await runPipeline(baseInput)).article!
     expect(article.content).toContain('第一段正文')
     expect(article.content).not.toMatch(/\n\s+/)
-  })
-
-  it('内容 Hash 稳定且可区分不同内容', async () => {
-    const first = (await runPipeline(baseInput)).article!
-    const second = (await runPipeline(baseInput)).article!
-    expect(first.contentHash).toHaveLength(64)
-    expect(first.contentHash).toBe(second.contentHash)
-
-    const changed = (
-      await runPipeline({
-        ...baseInput,
-        fields: { ...detailFields, title: { type: 'text', selector: '.author' } },
-      })
-    ).article!
-    expect(changed.contentHash).not.toBe(first.contentHash)
   })
 
   it('记录每个管道的执行阶段', async () => {
@@ -113,7 +59,6 @@ describe('数据管道：完整流程', () => {
       'clean',
       'validate',
       'normalize',
-      'hash',
       'output',
     ])
     expect(result.steps.every((step) => step.ok)).toBe(true)
@@ -122,18 +67,14 @@ describe('数据管道：完整流程', () => {
   it('解析器插件可以重格式化提取结果', async () => {
     const result = await runPipeline({
       ...baseInput,
-      fields: {
-        ...detailFields,
-        images: { type: 'attr', selector: '.article-content img', attribute: 'src', multiple: true },
-      },
       transform: async (data) => ({
         ...data,
-        // 模拟解密插件：把提取到的原始图片地址整体替换为解密后的地址
-        images: ['https://decrypted.example.com/images/a.png'],
+        // 模拟解密插件：把自定义字段 source 的原始值整体替换为解密后的值
+        source: '解密后的来源',
       }),
     })
 
-    expect(result.article?.images).toEqual(['https://decrypted.example.com/images/a.png'])
+    expect(result.article?.metadata).toMatchObject({ source: '解密后的来源' })
   })
 
   it('解析器插件抛错时该篇解析失败', async () => {
@@ -165,10 +106,9 @@ describe('数据管道：封面图（预留字段）', () => {
     expect(article.metadata ?? {}).not.toHaveProperty('cover')
   })
 
-  it('未映射封面时留空，正文图片照旧', async () => {
+  it('未映射封面时留空', async () => {
     const article = (await runPipeline(baseInput)).article!
     expect(article.coverUrl).toBeNull()
-    expect(article.images.length).toBeGreaterThan(0)
   })
 
   it('coverUrl 字段同样识别，缺失或伪协议时为空', async () => {
@@ -246,7 +186,6 @@ describe('数据管道：JSON 响应', () => {
         title: '接口文章',
         content: '<p>接口正文</p>',
         author: '李四',
-        images: ['https://cdn.example.com/1.png'],
         publishedAt: '2026-01-05',
       },
     })
@@ -257,20 +196,17 @@ describe('数据管道：JSON 响应', () => {
       url: 'https://api.example.com/articles/1',
       body,
       contentType: 'json',
-      crawlTime: '2026-02-01T00:00:00.000Z',
       fields: {
         title: { type: 'text', jsonPath: 'data.title', required: true },
         content: { type: 'text', jsonPath: 'data.content' },
         author: { type: 'text', jsonPath: 'data.author' },
         publishTime: { type: 'text', jsonPath: 'data.publishedAt' },
-        images: { type: 'text', jsonPath: 'data.images[*]', multiple: true },
       },
     })
 
     expect(result.article?.title).toBe('接口文章')
     expect(result.article?.author).toBe('李四')
-    expect(result.article?.publishTime).toBe('2026-01-05')
-    expect(result.article?.images).toEqual(['https://cdn.example.com/1.png'])
+    expect(result.article?.articleTime).toBe('2026-01-05')
   })
 
   it('非法 JSON 直接返回解析错误', async () => {

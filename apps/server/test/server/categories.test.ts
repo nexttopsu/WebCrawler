@@ -218,7 +218,6 @@ describe('栏目 CRUD', () => {
       categoryId: withArticle.id,
       title: '文章',
       url: `https://${site.domain}/article/1`,
-      status: 'published',
     })
 
     const blocked = await call(app, `/api/categories/${withArticle.id}`, { method: 'DELETE' })

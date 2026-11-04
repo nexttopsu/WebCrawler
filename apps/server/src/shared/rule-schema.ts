@@ -269,6 +269,10 @@ export const listRuleSchema = z
       .regex(/^[A-Za-z_:][-A-Za-z0-9_:.]{0,63}$/, '封面属性名不合法')
       .optional(),
     pagination: paginationSchema.optional(),
+    /** 列表阶段的解析器插件链（与顶层 parserPlugins / 详情阶段互不影响） */
+    parserPlugins: z.array(parserPluginNameSchema).max(10).optional(),
+    /** 列表阶段排除选择器：提取前先删除命中的节点 */
+    excludeSelectors: z.array(selectorSchema).max(20).optional(),
   })
   .strict()
   .superRefine((rule, ctx) => {
@@ -384,6 +388,8 @@ export const crawlRuleConfigSchema = z
     fields: fieldsMapSchema.optional(),
     /** 解析器插件链，按数组顺序在提取后执行 */
     parserPlugins: z.array(parserPluginNameSchema).max(10).optional(),
+    /** 详情阶段排除选择器：提取前先删除命中的节点 */
+    excludeSelectors: z.array(selectorSchema).max(20).optional(),
     clean: contentCleanRuleSchema.optional(),
     validate: validateConfigSchema.optional(),
     browser: browserRuleSchema.optional(),

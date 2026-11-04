@@ -240,7 +240,6 @@ describe('删除约束', () => {
       siteId: site.id,
       title: '文章',
       url: `https://${site.domain}/a/1`,
-      status: 'published',
     })
 
     const blocked = await call(app, `/api/sites/${site.id}?force=true`, { method: 'DELETE' })

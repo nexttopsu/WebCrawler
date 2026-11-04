@@ -123,7 +123,6 @@ const form = reactive({
   rateLimitMs: 0,
   publishedAfter: '',
   incremental: false,
-  dedupeByContentHash: true,
   followPagination: true,
 })
 
@@ -176,7 +175,6 @@ function openCreate(): void {
     rateLimitMs: 0,
     publishedAfter: '',
     incremental: false,
-    dedupeByContentHash: true,
     followPagination: true,
   })
   dialogVisible.value = true
@@ -203,7 +201,6 @@ async function submit(): Promise<void> {
   if (needSite.value && !form.siteId) return
 
   const options: Record<string, unknown> = {
-    dedupeByContentHash: form.dedupeByContentHash,
     followPagination: form.followPagination,
     retries: form.retries,
   }
@@ -574,17 +571,16 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
               </label>
             </div>
 
-            <el-form-item label="发布时间下限" label-width="110px" class="option-date">
+            <el-form-item label="文章时间下限" label-width="110px" class="option-date">
               <el-date-picker
                 v-model="form.publishedAfter"
                 type="datetime"
-                placeholder="只采集该时间之后发布的文章"
+                placeholder="只采集文章时间（原站点发布时间）在该时刻之后的文章"
                 style="width: 100%"
               />
             </el-form-item>
 
             <div class="option-switches">
-              <el-checkbox v-model="form.dedupeByContentHash">按正文内容去重</el-checkbox>
               <el-checkbox v-model="form.followPagination">按规则翻页</el-checkbox>
               <el-checkbox v-model="form.incremental">跳过已采集 URL</el-checkbox>
             </div>

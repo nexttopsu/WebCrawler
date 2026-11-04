@@ -14,7 +14,8 @@ import {
   RefreshCw,
   Upload,
 } from '@lucide/vue'
-import type { CategoryDto, CrawlRuleStatus, RuleDto, RuleVersionDto, SiteDto } from '@webcrawler/shared'
+import type { CategoryDto, CrawlRuleStatus, PluginDto, RuleDto, RuleVersionDto, SiteDto } from '@webcrawler/shared'
+import { useCommaText } from '@/composables/useCommaText'
 import {
   createRule,
   deleteRule,
@@ -26,6 +27,7 @@ import {
   setRuleStatus,
   validateRuleConfig,
 } from '@/api/rules'
+import { listPlugins } from '@/api/plugins'
 import { listSites } from '@/api/sites'
 import { listCategories } from '@/api/categories'
 import { ApiClientError, errorMessage } from '@/api/client'
@@ -80,18 +82,6 @@ async function loadCategories(siteId: number | null | undefined): Promise<void> 
 
 /* ------------------------------- 结构化表单 ------------------------------- */
 
-const DEFAULT_CONFIG = {
-  version: 1,
-  request: { mode: 'http', method: 'GET', timeoutMs: 15000 },
-  list: { itemSelector: '.news-item', linkSelector: 'a', titleSelector: '.title', pagination: { type: 'none' } },
-  detail: {
-    fields: {
-      title: { type: 'text', selector: 'h1', required: true },
-      content: { type: 'html', selector: '.article-content' },
-    },
-  },
-}
-
 const dialogVisible = ref(false)
 const editingId = ref<number | null>(null)
 const submitting = ref(false)
@@ -105,7 +95,76 @@ const form = reactive({
   categoryId: null as number | null,
   name: '',
   description: '',
+  /** 详情阶段解析器插件链（写入 config.parserPlugins） */
+  parserPlugins: [] as string[],
+  /** 列表阶段解析器插件链（写入 config.list.parserPlugins） */
+  listParserPlugins: [] as string[],
+  /** 详情阶段排除选择器（写入 config.excludeSelectors） */
+  excludeSelectors: [] as string[],
+  /** 列表阶段排除选择器（写入 config.list.excludeSelectors） */
+  listExcludeSelectors: [] as string[],
 })
+
+/** 解析器插件选项（type=parser 且已启用） */
+const parserPluginOptions = ref<PluginDto[]>([])
+
+/**
+ * 排除选择器：数组 ↔ 逗号分隔单行输入，单向同步（打字时只往数组解析，
+ * 不回写文本），否则敲 `,` 会被立即规范化掉导致输入不了逗号。
+ */
+const listExcludeText = useCommaText(
+  () => form.listExcludeSelectors,
+  (value) => {
+    form.listExcludeSelectors = value
+  },
+)
+
+const detailExcludeText = useCommaText(
+  () => form.excludeSelectors,
+  (value) => {
+    form.excludeSelectors = value
+  },
+)
+
+async function loadParserPlugins(): Promise<void> {
+  try {
+    const page = await listPlugins({ type: 'parser', enabled: 'true', pageSize: 100 })
+    parserPluginOptions.value = page.items
+  } catch {
+    parserPluginOptions.value = []
+  }
+}
+
+/**
+ * 把表单里的插件与排除选择器写进规则 JSON：
+ * 列表项进 config.list.*，详情项进 config 顶层；仅在非空时写入对应键。
+ */
+function mergeParserPlugins(config: Record<string, unknown>): Record<string, unknown> {
+  const listConfig = config.list as Record<string, unknown> | undefined
+  const listPatch: Record<string, unknown> = {}
+  if (form.listExcludeSelectors.length > 0) listPatch.excludeSelectors = [...form.listExcludeSelectors]
+  if (form.listParserPlugins.length > 0) listPatch.parserPlugins = [...form.listParserPlugins]
+  if (Object.keys(listPatch).length > 0) config.list = { ...(listConfig ?? {}), ...listPatch }
+  if (form.excludeSelectors.length > 0) config.excludeSelectors = [...form.excludeSelectors]
+  if (form.parserPlugins.length > 0) config.parserPlugins = [...form.parserPlugins]
+  return config
+}
+
+const DEFAULT_CONFIG = {
+  version: 1,
+  request: { mode: 'http', method: 'GET', timeoutMs: 15000 },
+  list: {
+    itemSelector: '.news-item',
+    fields: {
+      title: { type: 'text', selector: '.title', required: true },
+      url: { type: 'attr', selector: 'a', attribute: 'href', required: true },
+    },
+    pagination: { type: 'none' },
+  },
+  fields: {
+    content: { type: 'html', selector: '.article-content', required: true },
+  },
+}
 
 const formRules: FormRules = {
   siteId: [{ required: true, message: '请选择所属网站', trigger: 'change' }],
@@ -143,10 +202,20 @@ async function validateConfig(): Promise<void> {
 
 function openCreate(): void {
   editingId.value = null
-  Object.assign(form, { siteId: list.filters.siteId ?? null, categoryId: null, name: '', description: '' })
+  Object.assign(form, {
+    siteId: list.filters.siteId ?? null,
+    categoryId: null,
+    name: '',
+    description: '',
+    parserPlugins: [],
+    listParserPlugins: [],
+    excludeSelectors: [],
+    listExcludeSelectors: [],
+  })
   configText.value = JSON.stringify(DEFAULT_CONFIG, null, 2)
   validationErrors.value = []
   if (form.siteId) void loadCategories(form.siteId)
+  void loadParserPlugins()
   dialogVisible.value = true
 }
 
@@ -157,12 +226,29 @@ async function openEdit(row: RuleDto): Promise<void> {
     categoryId: row.categoryId,
     name: row.name,
     description: row.description ?? '',
+    parserPlugins: [],
+    listParserPlugins: [],
+    excludeSelectors: [],
+    listExcludeSelectors: [],
   })
   dialogVisible.value = true
   void loadCategories(row.siteId)
+  void loadParserPlugins()
   try {
     const detail = await getRule(row.id)
     configText.value = JSON.stringify(detail.config, null, 2)
+    form.parserPlugins = Array.isArray(detail.config?.parserPlugins)
+      ? detail.config.parserPlugins.filter((name): name is string => typeof name === 'string')
+      : []
+    form.listParserPlugins = Array.isArray(detail.config?.list?.parserPlugins)
+      ? detail.config.list.parserPlugins.filter((name): name is string => typeof name === 'string')
+      : []
+    form.excludeSelectors = Array.isArray(detail.config?.excludeSelectors)
+      ? detail.config.excludeSelectors.filter((name): name is string => typeof name === 'string')
+      : []
+    form.listExcludeSelectors = Array.isArray(detail.config?.list?.excludeSelectors)
+      ? detail.config.list.excludeSelectors.filter((name): name is string => typeof name === 'string')
+      : []
   } catch (error) {
     ElMessage.error(errorMessage(error))
   }
@@ -172,9 +258,9 @@ async function submit(): Promise<void> {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid || !form.siteId) return
 
-  let config: unknown
+  let config: Record<string, unknown>
   try {
-    config = JSON.parse(configText.value)
+    config = mergeParserPlugins(JSON.parse(configText.value) as Record<string, unknown>)
   } catch (error) {
     ElMessage.error(`规则不是合法 JSON：${(error as Error).message}`)
     return
@@ -257,6 +343,20 @@ async function onFileChange(event: Event): Promise<void> {
     }
     openCreate()
     configText.value = JSON.stringify(json, null, 2)
+    const imported = json as Record<string, unknown>
+    form.parserPlugins = Array.isArray(imported.parserPlugins)
+      ? (imported.parserPlugins as unknown[]).filter((name): name is string => typeof name === 'string')
+      : []
+    const importedList = imported.list as Record<string, unknown> | undefined
+    form.listParserPlugins = Array.isArray(importedList?.parserPlugins)
+      ? (importedList!.parserPlugins as unknown[]).filter((name): name is string => typeof name === 'string')
+      : []
+    form.excludeSelectors = Array.isArray(imported.excludeSelectors)
+      ? (imported.excludeSelectors as unknown[]).filter((name): name is string => typeof name === 'string')
+      : []
+    form.listExcludeSelectors = Array.isArray(importedList?.excludeSelectors)
+      ? (importedList!.excludeSelectors as unknown[]).filter((name): name is string => typeof name === 'string')
+      : []
     ElMessage.success('已导入到编辑器，确认网站与名称后保存')
   } catch (error) {
     ElMessage.error(`文件不是合法 JSON：${errorMessage(error)}`)
@@ -343,6 +443,21 @@ function openTester(row: RuleDto): void {
   router.push({ path: '/tester', query: { siteId: String(row.siteId), ruleId: String(row.id) } })
 }
 
+/** 列表字段数量（新版字段化写法） */
+function listFieldCount(row: RuleDto): number {
+  return Object.keys(row.config?.list?.fields ?? {}).length
+}
+
+/** 解析器插件数量描述：列表 N / 详情 M（只显示配置过的阶段） */
+function parserPluginCount(row: RuleDto): string {
+  const listCount = Array.isArray(row.config?.list?.parserPlugins) ? row.config.list.parserPlugins.length : 0
+  const detailCount = Array.isArray(row.config?.parserPlugins) ? row.config.parserPlugins.length : 0
+  const parts: string[] = []
+  if (listCount > 0) parts.push(`列表 ${listCount}`)
+  if (detailCount > 0) parts.push(`详情 ${detailCount}`)
+  return parts.join(' / ')
+}
+
 void loadSites()
 </script>
 
@@ -409,9 +524,16 @@ void loadSites()
         </template>
       </el-table-column>
 
-      <el-table-column label="列表选择器" min-width="180">
+      <el-table-column label="列表配置" min-width="200">
         <template #default="{ row }">
-          <code class="wb-mono selectors">{{ row.config?.list?.itemSelector ?? '—' }}</code>
+          <div class="list-config-cell">
+            <code class="wb-mono selectors">{{ row.config?.list?.itemSelector ?? '—' }}</code>
+            <span class="wb-muted cell-sub">
+              <template v-if="listFieldCount(row) > 0">{{ listFieldCount(row) }} 个列表字段</template>
+              <template v-else>旧版选择器写法</template>
+              <template v-if="parserPluginCount(row)"> · 解析器插件 {{ parserPluginCount(row) }}</template>
+            </span>
+          </div>
         </template>
       </el-table-column>
 
@@ -483,7 +605,7 @@ void loadSites()
       description="配置必须通过 Rule Schema 校验才能保存；保存后版本号自动 +1。"
       @submit="submit"
     >
-      <el-form ref="formRef" :model="form" :rules="formRules" label-width="90px">
+      <el-form ref="formRef" :model="form" :rules="formRules" label-width="90px" class="rule-form">
         <div class="form-grid">
           <el-form-item label="所属网站" prop="siteId">
             <el-select v-model="form.siteId" filterable placeholder="选择网站" style="width: 100%" @change="loadCategories(form.siteId)">
@@ -502,14 +624,76 @@ void loadSites()
         <el-form-item label="描述">
           <el-input v-model="form.description" maxlength="200" placeholder="可选" />
         </el-form-item>
+        <el-form-item label="列表插件">
+          <el-select
+            v-model="form.listParserPlugins"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="不使用（列表字段提取后直接使用）"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="plugin in parserPluginOptions"
+              :key="plugin.name"
+              :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+              :value="plugin.name"
+            />
+          </el-select>
+          <p class="plugin-hint">列表字段提取后按顺序重格式化（如图片解密）；写入 list.parserPlugins，与详情互不影响。</p>
+        </el-form-item>
+        <el-form-item label="详情插件">
+          <el-select
+            v-model="form.parserPlugins"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="不使用（详情字段提取后直接清洗入库）"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="plugin in parserPluginOptions"
+              :key="plugin.name"
+              :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+              :value="plugin.name"
+            />
+          </el-select>
+          <p class="plugin-hint">详情字段提取后按顺序重格式化（如图片解密）；写入 parserPlugins，与列表互不影响。</p>
+        </el-form-item>
+        <el-form-item label="列表排除">
+          <el-input
+            v-model="listExcludeText"
+            clearable
+            placeholder="如 .ad, .time（逗号分隔，可不填）"
+          />
+          <p class="plugin-hint">优先级最高：列表字段提取前先删除命中的节点（混淆 / 广告）；写入 list.excludeSelectors，可不填。</p>
+        </el-form-item>
+        <el-form-item label="详情排除">
+          <el-input
+            v-model="detailExcludeText"
+            clearable
+            placeholder="如 .ad, .author-info（逗号分隔，可不填）"
+          />
+          <p class="plugin-hint">优先级最高：详情字段提取前先删除命中的节点（混淆 / 广告）；写入 excludeSelectors，可不填。</p>
+        </el-form-item>
         <el-form-item label="规则 JSON">
           <div class="json-editor">
             <div class="json-editor__bar">
-              <el-button size="small" text @click="formatConfig">
-                <Braces :size="13" />
-                格式化
-              </el-button>
-              <el-button size="small" text :loading="validating" @click="validateConfig">Schema 校验</el-button>
+              <span class="json-editor__label">
+                <Braces :size="14" />
+                JSON 配置
+              </span>
+              <div class="json-editor__actions">
+                <el-button @click="formatConfig">
+                  <Braces :size="14" />
+                  <span>格式化</span>
+                </el-button>
+                <el-button type="primary" plain :loading="validating" @click="validateConfig">
+                  <span>Schema 校验</span>
+                </el-button>
+              </div>
             </div>
             <el-input v-model="configText" type="textarea" :rows="16" class="wb-mono" spellcheck="false" />
             <ul v-if="validationErrors.length" class="json-errors">
@@ -590,6 +774,19 @@ void loadSites()
   word-break: break-all;
 }
 
+.list-config-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plugin-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--wb-text-muted);
+  line-height: 1.5;
+}
+
 .row-actions {
   display: flex;
   align-items: center;
@@ -607,26 +804,100 @@ void loadSites()
   gap: 0 16px;
 }
 
+/* ---- 控件高度统一：按钮 / 输入框 / 选择框均为 32px ----
+   页头与筛选栏在 .view 下；表单弹窗 append-to-body，样式挂在 .rule-form 自身。 */
+.view :deep(.page-header .el-button),
+.view :deep(.filter-bar .el-button) {
+  height: 32px;
+}
+
+.view :deep(.filter-bar .el-input__wrapper) {
+  height: 32px;
+}
+
+.view :deep(.filter-bar .el-select__wrapper) {
+  min-height: 32px;
+}
+
+.rule-form :deep(.el-form-item .el-button) {
+  height: 32px;
+}
+
+.rule-form :deep(.el-form-item .el-input__wrapper) {
+  height: 32px;
+}
+
+.rule-form :deep(.el-form-item .el-select__wrapper) {
+  min-height: 32px;
+}
+
+/* ------------------------------- JSON 编辑器 ------------------------------ */
+
 .json-editor {
   width: 100%;
+  border: 1px solid var(--wb-border);
+  border-radius: var(--wb-radius-sm);
+  overflow: hidden;
+  background: var(--wb-surface);
 }
 
 .json-editor__bar {
   display: flex;
-  gap: 6px;
-  margin-bottom: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  background: var(--wb-surface-muted);
+  border-bottom: 1px solid var(--wb-border);
 }
 
-.json-editor :deep(textarea) {
+.json-editor__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--wb-text-secondary);
+}
+
+.json-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 工具栏按钮：统一 28px 紧凑高度，与卡片条高度匹配（覆盖 .rule-form 的 32px 规则） */
+.rule-form .json-editor__actions :deep(.el-button) {
+  height: 28px;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-size: 12.5px;
+}
+
+.rule-form .json-editor__actions :deep(.el-button span) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.json-editor :deep(.el-textarea__inner) {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 12px 14px;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 12.5px;
   line-height: 1.6;
 }
 
+.json-editor :deep(.el-textarea__inner:focus) {
+  box-shadow: none;
+}
+
 .json-errors {
-  margin: 8px 0 0;
-  padding: 8px 10px 8px 24px;
-  border-radius: var(--wb-radius-sm);
+  margin: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--wb-border);
   background: var(--wb-danger-soft);
   color: var(--wb-danger);
   font-size: 12px;

@@ -2,11 +2,11 @@
 /**
  * 预览文档装配与草稿存储测试。
  *
- * - buildPreviewDocument：注入脚本位置、`</script>` 转义；
+ * - buildPreviewDocument：快照透传与空快照占位；
  * - 草稿：容量上限、损坏数据、版本不符、无敏感字段。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { buildPreviewDocument } from '../src/preview/agent-source'
+import { buildPreviewDocument, emptyPreviewDocument } from '../src/preview/preview-document'
 import {
   DRAFT_MAX_BYTES,
   clearTesterDraft,
@@ -16,23 +16,14 @@ import {
 } from '../src/composables/useTesterDraft'
 
 describe('buildPreviewDocument', () => {
-  it('把注入脚本放到 </body> 之前', () => {
+  it('快照原样透传（不再注入任何脚本）', () => {
     const html = '<!doctype html><html><body><h1>标题</h1></body></html>'
-    const output = buildPreviewDocument(html, 'window.__agent = 1')
-    expect(output.indexOf('window.__agent = 1')).toBeLessThan(output.indexOf('</body>'))
-    expect(output).toContain('<h1>标题</h1>')
+    expect(buildPreviewDocument(html)).toBe(html)
   })
 
-  it('没有 body 时直接追加，不破坏原文档', () => {
-    const output = buildPreviewDocument('<div>片段</div>', 'x()')
-    expect(output.startsWith('<div>片段</div>')).toBe(true)
-    expect(output).toContain('<script>x()</script>')
-  })
-
-  it('注入代码中的 </script> 被转义，不会提前闭合标签', () => {
-    const output = buildPreviewDocument('<html><body></body></html>', 'var s = "</script>"')
-    expect(output).not.toContain('"</script>"')
-    expect(output).toContain('<\\/script>')
+  it('空白快照回退占位文档', () => {
+    expect(buildPreviewDocument('   ')).toBe(emptyPreviewDocument())
+    expect(emptyPreviewDocument()).toContain('加载页面')
   })
 })
 

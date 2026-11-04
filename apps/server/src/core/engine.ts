@@ -10,7 +10,7 @@ import type { ArticleData, ArticleLink, CrawlContext, FieldRule, ListRuleConfig,
 import { RequestError, RequestErrorCode, type BrowserClient, type RequestClient } from '../request/index.js'
 import { ParserError } from './errors.js'
 import { Parser, createParser } from './parser/index.js'
-import { extractListItems } from './parser/html2object-bridge.js'
+import { extractListItems, stripElements } from './parser/html2object-bridge.js'
 import { runPipeline, type PipelineResult } from './pipeline.js'
 import { getDocumentBase, resolveUrl } from './url.js'
 
@@ -25,11 +25,12 @@ export interface CrawlServices {
 /**
  * 解析器插件执行器：按规则 `parserPlugins` 顺序对提取结果做重格式化。
  * 由应用层实现（从插件注册表解析插件链），引擎只负责在正确时机调用。
+ * `stage` 标记执行阶段：list = 列表字段提取后，detail = 详情字段提取后。
  */
 export type ParserPluginRunner = (
   data: Record<string, unknown>,
   context: CrawlContext,
-  source: { html: string; url: string },
+  source: { html: string; url: string; stage: 'list' | 'detail' },
 ) => Promise<Record<string, unknown>>
 
 /** 创建引擎的配置。 */
@@ -214,15 +215,17 @@ export class CrawlEngine {
 
     const listUrl = listRule.url ?? context.category.listUrl ?? context.url
     const page = await this.fetchPage(context, listUrl)
-    const base = getDocumentBase(page.html, page.finalUrl)
+    // 排除选择器优先级最高：字段提取前先删除命中的节点（混淆 / 广告等）
+    const html = stripElements(page.html, listRule.excludeSelectors ?? [])
+    const base = getDocumentBase(html, page.finalUrl)
     const parser = this.services.parser
 
     // 字段配置路径：html2object loop 一次解析全部列表项
     if (listRule.fields) {
-      return this.listPageWithFields(listRule, page, base)
+      return await this.listPageWithFields(listRule, context, page, html, base)
     }
 
-    const doc = this.services.parser.parseHtml(page.html)
+    const doc = this.services.parser.parseHtml(html)
 
     const items = doc.selectAll(listRule.itemSelector, listRule.itemSelectorType ?? 'css')
     const links: ArticleLink[] = []
@@ -281,21 +284,51 @@ export class CrawlEngine {
     }
   }
 
-  /** 字段配置路径的列表提取：title / url 必填，其余字段进 metadata。 */
-  private listPageWithFields(
+  /**
+   * 字段配置路径的列表提取：title / url 必填，其余字段进 metadata。
+   *
+   * 规则配置了 `parserPlugins` 时，每个列表项在提取完成后都会过一遍插件链
+   * （stage = 'list'），插件可用于修正列表阶段的自定义字段；插件抛错时
+   * 该条按「重复/非法链接」计数并记录警告，不中断整页提取。
+   */
+  private async listPageWithFields(
     listRule: ListRuleConfig,
+    context: CrawlContext,
     page: FetchedPage,
+    html: string,
     base: string,
-  ): ListPageResult {
+  ): Promise<ListPageResult> {
     const fields = listRule.fields ?? {}
-    const items = extractListItems(page.html, listRule.itemSelector, listRule.itemSelectorType, fields)
+    // html 已由调用方应用排除选择器（提取前删除混淆节点）
+    const items = extractListItems(html, listRule.itemSelector, listRule.itemSelectorType, fields)
     const parser = this.services.parser
+
+    // 列表阶段只用 list.parserPlugins（与详情阶段的顶层 parserPlugins 互不影响）
+    const pluginNames = listRule.parserPlugins ?? []
+    const usePlugins = Boolean(this.parserPluginRunner && pluginNames.length > 0)
 
     const links: ArticleLink[] = []
     const seen = new Set<string>()
     let duplicateCount = 0
 
-    for (const item of items) {
+    for (const rawItem of items) {
+      let item = rawItem
+      if (usePlugins) {
+        try {
+          item = await this.parserPluginRunner!(rawItem, context, {
+            html: page.html,
+            url: page.finalUrl,
+            stage: 'list',
+          })
+        } catch (error) {
+          context.logger.warn(
+            `列表解析器插件执行失败，该条已跳过：${error instanceof Error ? error.message : String(error)}`,
+          )
+          duplicateCount += 1
+          continue
+        }
+      }
+
       const rawUrl = typeof item.url === 'string' ? item.url.trim() : ''
       if (!rawUrl || /^(javascript|mailto|tel):/i.test(rawUrl)) {
         duplicateCount += 1
@@ -324,10 +357,36 @@ export class CrawlEngine {
         if (/^https?:\/\//i.test(coverAbsolute)) link.coverUrl = coverAbsolute
       }
 
+      // 统一内置字段：列表阶段提取到的作者 / 摘要 / 正文 / 文章时间直接入对应列，
+      // 详情阶段未提取时保留列表值（见 saveListArticle 与 mergeDetailFields 的合并逻辑）
+      const builtInText = (key: string): string => {
+        const value = item[key]
+        return typeof value === 'string' && value.trim() !== '' ? parser.cleanText(value) : ''
+      }
+      const listAuthor = builtInText('author')
+      if (listAuthor) link.author = listAuthor
+      const listSummary = builtInText('summary')
+      if (listSummary) link.summary = listSummary
+      const listContent = builtInText('content')
+      if (listContent) link.content = listContent
+      const listArticleTime = builtInText('articleTime') || builtInText('publishTime')
+      if (listArticleTime) link.articleTime = listArticleTime
+
       // 其余自定义字段随链接带入 metadata，列表任务入库时写入 extra
       const metadata: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(item)) {
-        if (key === 'title' || key === 'url' || key === 'cover' || key === 'coverUrl') continue
+        if (
+          key === 'title' ||
+          key === 'url' ||
+          key === 'cover' ||
+          key === 'coverUrl' ||
+          key === 'author' ||
+          key === 'summary' ||
+          key === 'content' ||
+          key === 'articleTime' ||
+          key === 'publishTime'
+        )
+          continue
         if (value === null || value === undefined || value === '') continue
         metadata[key] = value
       }
@@ -373,12 +432,19 @@ export class CrawlEngine {
       throw new ParserError('INVALID_FIELD_RULE', '规则缺少 detail.fields，无法提取详情字段')
     }
 
+    // 排除选择器优先级最高：字段提取前先删除命中的节点（混淆 / 广告等）
+    const body = stripElements(page.html, context.rule.config.excludeSelectors ?? [])
+
     // 解析器插件链：规则配置了 parserPlugins 且运行时提供执行器时才启用
     const pluginNames = context.rule.config.parserPlugins ?? []
     const transform =
       this.parserPluginRunner && pluginNames.length > 0
         ? (data: Record<string, unknown>) =>
-            this.parserPluginRunner!(data, context, { html: page.html, url: page.finalUrl })
+            this.parserPluginRunner!(data, context, {
+              html: page.html,
+              url: page.finalUrl,
+              stage: 'detail',
+            })
         : undefined
 
     const result = await runPipeline(
@@ -386,7 +452,7 @@ export class CrawlEngine {
         siteId: context.site.id,
         categoryId: context.category.id,
         url: page.finalUrl,
-        body: page.html,
+        body,
         fields,
         clean: context.rule.config.clean,
         validate: context.rule.config.validate,

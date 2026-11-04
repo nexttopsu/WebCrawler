@@ -10,11 +10,9 @@ import {
   type ArticleDeleteResultDto,
   type ArticleDto,
   type ArticleRawDto,
-  type ArticleStatus,
   type ArticleSummaryDto,
 } from '../../shared/index.js'
 import { z } from 'zod'
-import { createHash } from 'node:crypto'
 import { BadRequestError, NotFoundError, ValidationError } from '../errors.js'
 import { keywordField, likePattern, paginationFields, runRawList, toPage } from '../lib/query.js'
 
@@ -35,9 +33,10 @@ const EXPORT_BATCH = 200
 /* -------------------------------------------------------------------------- */
 
 export interface SaveArticleOptions {
-  dedupeByContentHash?: boolean
-  publishedAfter?: string
-  publishedBefore?: string
+  /** 只保留文章时间晚于该值的文章（增量采集窗口） */
+  articleTimeAfter?: string
+  /** 只保留文章时间早于该值的文章（增量采集窗口） */
+  articleTimeBefore?: string
 }
 
 export type SaveOutcomeStatus = 'created' | 'updated' | 'skipped'
@@ -49,7 +48,7 @@ export interface SaveOutcome {
   reason?: string
 }
 
-/** 把各种写法的发布时间转成 ISO；解析失败返回 null（不阻塞入库）。 */
+/** 把各种写法的文章时间（原站点发布时间）转成 ISO；解析失败返回 null（不阻塞入库）。 */
 export function toIsoTime(raw: string | null | undefined): string | null {
   if (!raw) return null
   const value = raw.trim()
@@ -59,14 +58,6 @@ export function toIsoTime(raw: string | null | undefined): string | null {
   const timestamp = Date.parse(normalized)
   if (Number.isNaN(timestamp)) return null
   return new Date(timestamp).toISOString()
-}
-
-function countWords(content: string): number {
-  // 中日韩按字符计，其余按空白分词；两者相加，避免中文文章词数为 0
-  const cjk = content.match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g)?.length ?? 0
-  const words = content.replace(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g, ' ').trim()
-  const latin = words ? words.split(/\s+/).length : 0
-  return cjk + latin
 }
 
 function buildSummary(content: string): string | null {
@@ -88,31 +79,35 @@ function clampJson(value: unknown, max = EXTRA_MAX): string {
  * 封面图地址归一化。
  *
  * 封面是预留字段、允许为空：显式给了就优先用它（相对地址按文章地址补全），
- * 没给（null / 空串）则退化为正文首图，两者都没有时返回 null。
+ * 没给（null / 空串）则返回 null。
  * 只接受 http(s)，避免把 `javascript:` 这类伪协议带进前端。
  */
-function resolveCoverUrl(raw: string | null | undefined, fallback: string, baseUrl: string): string | null {
+function resolveCoverUrl(raw: string | null | undefined, baseUrl: string): string | null {
   const value = raw?.trim()
-  let candidate = ''
-  if (value) {
-    try {
-      candidate = new URL(value, baseUrl).toString()
-    } catch {
-      candidate = ''
-    }
+  if (!value) return null
+  try {
+    const candidate = new URL(value, baseUrl).toString()
+    return /^https?:\/\//i.test(candidate) ? candidate : null
+  } catch {
+    return null
   }
-  if (!/^https?:\/\//i.test(candidate)) candidate = fallback
-  return /^https?:\/\//i.test(candidate) ? candidate : null
+}
+
+/**
+ * 读取文章时间并归一化为 ISO。
+ *
+ * 管道输出统一用 `articleTime`；外部插件可能仍按旧契约返回 `publishTime`，
+ * 这里兼容读取一次，避免旧插件给出的时间被静默丢弃。
+ */
+function readArticleTime(article: ArticleData): string | null {
+  const legacy = (article as ArticleData & { publishTime?: string }).publishTime
+  return toIsoTime(article.articleTime) ?? toIsoTime(legacy)
 }
 
 /**
  * 保存一篇采集到的文章。
  *
- * 去重顺序：
- * 1. 同一 URL 已存在：内容 Hash 相同 → skipped（未变化）；
- *    不同 → updated（保留 id 与创建时间，更新正文与时间）。
- * 2. 内容 Hash 命中其他 URL → skipped（转载/聚合重复）。
- * 3. 其余 → created。
+ * 去重：同一 URL 已存在时按「已存在」更新（保留 id 与创建时间）。
  *
  * 数据库唯一约束 `ux_article_url` 是最后一道防线：并发写入同一 URL 时
  * 第二个写入会抛唯一约束错误，由调用方按「已存在」处理。
@@ -130,18 +125,16 @@ export function saveCrawledArticle(
   const { article } = input
   const models = getModels()
   const url = normalizeArticleUrl(article.url)
-  const publishedAt = toIsoTime(article.publishTime)
+  const articleTime = readArticleTime(article)
 
-  if (options.publishedAfter && publishedAt && publishedAt < options.publishedAfter) {
-    return { status: 'skipped', reason: `发布时间 ${publishedAt} 早于任务窗口` }
+  if (options.articleTimeAfter && articleTime && articleTime < options.articleTimeAfter) {
+    return { status: 'skipped', reason: `文章时间 ${articleTime} 早于任务窗口` }
   }
-  if (options.publishedBefore && publishedAt && publishedAt > options.publishedBefore) {
-    return { status: 'skipped', reason: `发布时间 ${publishedAt} 晚于任务窗口` }
+  if (options.articleTimeBefore && articleTime && articleTime > options.articleTimeBefore) {
+    return { status: 'skipped', reason: `文章时间 ${articleTime} 晚于任务窗口` }
   }
 
   const content = article.content ?? ''
-  const html = article.html ?? ''
-  const images = article.images ?? []
   const metadata = { ...(article.metadata ?? {}) }
   delete metadata.sourceUrl
   delete metadata.listTitle
@@ -153,43 +146,22 @@ export function saveCrawledArticle(
     title: article.title.trim(),
     url,
     author: article.author ?? null,
-    summary: buildSummary(content),
+    // 规则显式提取的摘要优先，否则按正文自动生成
+    summary: article.summary?.trim() || buildSummary(content),
     content,
-    contentHtml: html,
-    coverUrl: resolveCoverUrl(article.coverUrl, images[0] ?? '', url),
-    images: clampJson(images),
-    contentHash: article.contentHash ?? null,
-    wordCount: countWords(content),
-    publishedAt,
-    status: 'published' as ArticleStatus,
+    coverUrl: resolveCoverUrl(article.coverUrl, url),
+    articleTime,
     extra: clampJson(metadata),
     // 完整详情一次采出来的文章，详情状态直接记为已采集
     detailStatus: ArticleDetailStatus.COLLECTED,
-    detailCollectedAt: new Date().toISOString(),
-    detailError: null,
-    crawlTime: article.crawlTime ?? new Date().toISOString(),
     ...(input.rawHtml ? { rawHtml: input.rawHtml.slice(0, RAW_HTML_MAX) } : {}),
   }
 
   const existing = models.article.findOne({ url })
 
   if (existing) {
-    if (existing.contentHash && article.contentHash && existing.contentHash === article.contentHash) {
-      return { status: 'skipped', articleId: existing.id, reason: '内容未变化' }
-    }
     models.article.update(existing.id, fields)
     return { status: 'updated', articleId: existing.id }
-  }
-
-  if (options.dedupeByContentHash !== false && article.contentHash) {
-    const duplicate = models.article.findOne({ contentHash: article.contentHash })
-    if (duplicate) {
-      return {
-        status: 'skipped',
-        articleId: duplicate.id,
-        reason: `与已有文章 ${duplicate.id} 内容重复`,
-      }
-    }
   }
 
   const created = models.article.create(fields)
@@ -213,7 +185,8 @@ export interface ListArticleOutcome {
 }
 
 /**
- * 列表阶段入库：只落 title + url（含列表阶段提取的自定义字段与封面）。
+ * 列表阶段入库：落 title + url，以及列表阶段提取到的统一内置字段
+ * （作者 / 摘要 / 正文 / 封面 / 文章时间）与自定义字段。
  *
  * 同一 URL 已存在时跳过（不覆盖已有数据），详情留待 `detailStatus` 驱动补采。
  */
@@ -224,9 +197,13 @@ export function saveListArticle(input: {
   title: string
   url: string
   coverUrl?: string | null
+  author?: string | null
+  summary?: string | null
+  content?: string | null
+  /** 列表阶段提取的文章时间（原始字符串，入库前转 ISO 8601） */
+  articleTime?: string | null
   /** 列表阶段提取的自定义字段 */
   extra?: Record<string, unknown>
-  crawlTime?: string
 }): ListArticleOutcome {
   const models = getModels()
   const url = normalizeArticleUrl(input.url)
@@ -248,18 +225,19 @@ export function saveListArticle(input: {
     taskId: input.taskId,
     title,
     url,
-    status: 'pending' as ArticleStatus,
     detailStatus: ArticleDetailStatus.PENDING,
-    detailError: null,
     coverUrl: input.coverUrl ?? null,
+    author: input.author ?? null,
+    summary: input.summary ?? null,
+    content: input.content ?? '',
+    articleTime: toIsoTime(input.articleTime),
     extra: clampJson(input.extra ?? {}),
-    crawlTime: input.crawlTime ?? new Date().toISOString(),
   })
   return { status: 'created', articleId: created.id }
 }
 
 export interface DetailArticleOutcome {
-  status: 'created' | 'updated' | 'skipped'
+  status: 'created' | 'updated'
   articleId?: number
   reason?: string
 }
@@ -268,8 +246,7 @@ export interface DetailArticleOutcome {
  * 详情补采入库：同名字段**有值才覆盖**列表阶段的值。
  *
  * - URL 不存在（如列表入库前详情先跑）→ 直接按完整文章创建；
- * - 已存在 → 合并字段（空值保留旧值），重算内容 Hash；
- *   Hash 未变化 → skipped，不空转更新。
+ * - 已存在 → 合并字段（空值保留旧值）。
  */
 export function applyArticleDetail(input: {
   article: ArticleData
@@ -283,35 +260,21 @@ export function applyArticleDetail(input: {
   const existing = models.article.findOne({ url })
 
   if (!existing) {
-    const outcome = saveCrawledArticle(
-      {
-        article: input.article,
-        siteId: input.siteId,
-        categoryId: input.categoryId,
-        taskId: input.taskId,
-        rawHtml: input.rawHtml,
-      },
-      { dedupeByContentHash: false },
-    )
+    const outcome = saveCrawledArticle({
+      article: input.article,
+      siteId: input.siteId,
+      categoryId: input.categoryId,
+      taskId: input.taskId,
+      rawHtml: input.rawHtml,
+    })
     return { status: outcome.status === 'created' ? 'created' : 'updated', articleId: outcome.articleId }
   }
 
   const merged = mergeDetailFields(existing, input.article)
 
-  if (existing.contentHash && merged.contentHash && existing.contentHash === merged.contentHash) {
-    models.article.update(existing.id, {
-      detailStatus: ArticleDetailStatus.COLLECTED,
-      detailCollectedAt: new Date().toISOString(),
-      detailError: null,
-    })
-    return { status: 'skipped', articleId: existing.id, reason: '详情内容未变化' }
-  }
-
   models.article.update(existing.id, {
-    ...merged.fields,
+    ...merged,
     detailStatus: ArticleDetailStatus.COLLECTED,
-    detailCollectedAt: new Date().toISOString(),
-    detailError: null,
     ...(input.rawHtml ? { rawHtml: input.rawHtml.slice(0, RAW_HTML_MAX) } : {}),
   })
   return { status: 'updated', articleId: existing.id }
@@ -323,30 +286,21 @@ export function applyArticleDetail(input: {
  * 详情提取为空（未映射到 / 页面没有）时保留列表阶段已有的值，
  * 避免详情失败把标题、封面等清掉；详情有值才覆盖。
  */
-function mergeDetailFields(
-  existing: ArticleRow,
-  article: ArticleData,
-): { fields: Record<string, unknown>; contentHash: string } {
+function mergeDetailFields(existing: ArticleRow, article: ArticleData): Record<string, unknown> {
   const pick = (incoming: string | null | undefined, old: string | null | undefined): string | null => {
     const value = incoming?.trim()
     return value ? value : (old ?? null)
   }
 
   const content = pick(article.content, existing.content)
-  const html = pick(article.html, existing.contentHtml)
   const author = pick(article.author, existing.author)
 
-  const publishedAt = (() => {
-    const incoming = toIsoTime(article.publishTime)
-    return incoming ?? existing.publishedAt ?? null
+  const articleTime = (() => {
+    const incoming = readArticleTime(article)
+    return incoming ?? existing.articleTime ?? null
   })()
 
-  const images = article.images.length > 0 ? article.images : parseStringArray(existing.images)
-  const coverUrl = (() => {
-    const incoming = resolveCoverUrl(article.coverUrl, '', existing.url ?? '')
-    if (incoming) return incoming
-    return existing.coverUrl ?? null
-  })()
+  const coverUrl = resolveCoverUrl(article.coverUrl, existing.url ?? '') ?? existing.coverUrl ?? null
 
   const summary = content ? buildSummary(content) : existing.summary ?? null
 
@@ -359,39 +313,24 @@ function mergeDetailFields(
     }
   }
 
-  const contentHash = hashContent(article.title.trim() || existing.title || '', content ?? '')
-
   return {
-    fields: {
-      title: article.title.trim() || existing.title,
-      author,
-      summary,
-      content: content ?? '',
-      contentHtml: html ?? '',
-      coverUrl,
-      images: clampJson(images),
-      contentHash,
-      wordCount: countWords(content ?? ''),
-      publishedAt,
-      status: 'published' as ArticleStatus,
-      extra: clampJson(mergedExtra),
-    },
-    contentHash,
+    title: article.title.trim() || existing.title,
+    author,
+    summary,
+    content: content ?? '',
+    coverUrl,
+    articleTime,
+    extra: clampJson(mergedExtra),
   }
 }
 
-function hashContent(title: string, content: string): string {
-  return createHash('sha256').update(`${title}\n${content}`, 'utf8').digest('hex')
-}
-
 /** 标记详情采集失败（可重试）。 */
-export function markArticleDetailFailed(rawUrl: string, error: string): void {
+export function markArticleDetailFailed(rawUrl: string): void {
   const url = normalizeArticleUrl(rawUrl)
   const existing = getModels().article.findOne({ url })
   if (!existing) return
   getModels().article.update(existing.id, {
     detailStatus: ArticleDetailStatus.FAILED,
-    detailError: error.slice(0, 500),
   })
 }
 
@@ -444,13 +383,12 @@ export const articleListQuerySchema = z.object({
   siteId: z.coerce.number().int().positive().optional(),
   categoryId: z.coerce.number().int().positive().optional(),
   taskId: z.coerce.number().int().positive().optional(),
-  status: z.enum(['pending', 'published', 'ignored']).optional(),
   detailStatus: z.enum(['pending', 'collected', 'failed']).optional(),
-  publishedFrom: isoTimeField.optional(),
-  publishedTo: isoTimeField.optional(),
-  crawledFrom: isoTimeField.optional(),
-  crawledTo: isoTimeField.optional(),
-  sort: z.enum(['id', 'publishedAt', 'crawlTime']).default('id'),
+  articleTimeFrom: isoTimeField.optional(),
+  articleTimeTo: isoTimeField.optional(),
+  createdFrom: isoTimeField.optional(),
+  createdTo: isoTimeField.optional(),
+  sort: z.enum(['id', 'articleTime', 'createdAt']).default('id'),
   order: z.enum(['asc', 'desc']).default('desc'),
 })
 
@@ -477,10 +415,6 @@ function buildWhere(query: Omit<ArticleListQuery, 'page' | 'pageSize' | 'sort' |
     conditions.push('t.taskId = ?')
     params.push(query.taskId)
   }
-  if (query.status) {
-    conditions.push('t.status = ?')
-    params.push(query.status)
-  }
   if (query.detailStatus) {
     conditions.push('t.detailStatus = ?')
     params.push(query.detailStatus)
@@ -492,39 +426,29 @@ function buildWhere(query: Omit<ArticleListQuery, 'page' | 'pageSize' | 'sort' |
     const pattern = likePattern(query.keyword)
     params.push(pattern, pattern, pattern)
   }
-  if (query.publishedFrom) {
-    conditions.push('t.publishedAt >= ?')
-    params.push(query.publishedFrom)
+  if (query.articleTimeFrom) {
+    conditions.push('t.articleTime >= ?')
+    params.push(query.articleTimeFrom)
   }
-  if (query.publishedTo) {
-    conditions.push('t.publishedAt <= ?')
-    params.push(query.publishedTo)
+  if (query.articleTimeTo) {
+    conditions.push('t.articleTime <= ?')
+    params.push(query.articleTimeTo)
   }
-  if (query.crawledFrom) {
-    conditions.push('t.crawlTime >= ?')
-    params.push(query.crawledFrom)
+  if (query.createdFrom) {
+    conditions.push('t.createdAt >= ?')
+    params.push(query.createdFrom)
   }
-  if (query.crawledTo) {
-    conditions.push('t.crawlTime <= ?')
-    params.push(query.crawledTo)
+  if (query.createdTo) {
+    conditions.push('t.createdAt <= ?')
+    params.push(query.createdTo)
   }
 
   return { conditions, params }
 }
 
-/** 列表不返回正文与原始 HTML，但保留 images 以便统计图片数。 */
+/** 列表不返回正文与原始 HTML。 */
 const SUMMARY_COLUMNS =
-  't.id, t.siteId, t.categoryId, t.taskId, t.title, t.url, t.author, t.summary, t.coverUrl, t.publishedAt, t.status, t.detailStatus, t.detailCollectedAt, t.detailError, t.contentHash, t.images, t.wordCount, t.crawlTime, t.createdAt, t.updatedAt'
-
-function parseStringArray(raw: string | null): string[] {
-  if (!raw) return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
-  } catch {
-    return []
-  }
-}
+  't.id, t.siteId, t.categoryId, t.taskId, t.title, t.url, t.author, t.summary, t.coverUrl, t.articleTime, t.detailStatus, t.createdAt, t.updatedAt'
 
 type SummaryRow = Pick<
   ArticleRow,
@@ -537,15 +461,8 @@ type SummaryRow = Pick<
   | 'author'
   | 'summary'
   | 'coverUrl'
-  | 'publishedAt'
-  | 'status'
+  | 'articleTime'
   | 'detailStatus'
-  | 'detailCollectedAt'
-  | 'detailError'
-  | 'contentHash'
-  | 'images'
-  | 'wordCount'
-  | 'crawlTime'
   | 'createdAt'
   | 'updatedAt'
 >
@@ -561,15 +478,8 @@ function toSummaryDto(row: SummaryRow): ArticleSummaryDto {
     author: row.author,
     summary: row.summary,
     coverUrl: row.coverUrl,
-    publishedAt: row.publishedAt,
-    status: (row.status ?? 'published') as ArticleStatus,
+    articleTime: row.articleTime,
     detailStatus: (row.detailStatus ?? 'collected') as ArticleDetailStatus,
-    detailCollectedAt: row.detailCollectedAt ?? null,
-    detailError: row.detailError ?? null,
-    contentHash: row.contentHash,
-    wordCount: row.wordCount ?? 0,
-    imageCount: parseStringArray(row.images).length,
-    crawlTime: row.crawlTime,
     createdAt: row.createdAt ?? '',
     updatedAt: row.updatedAt ?? '',
   }
@@ -577,7 +487,8 @@ function toSummaryDto(row: SummaryRow): ArticleSummaryDto {
 
 export function listArticles(query: ArticleListQuery) {
   const { conditions, params } = buildWhere(query)
-  const sortColumn = query.sort === 'publishedAt' ? 't.publishedAt' : query.sort === 'crawlTime' ? 't.crawlTime' : 't.id'
+  const sortColumn =
+    query.sort === 'articleTime' ? 't.articleTime' : query.sort === 'createdAt' ? 't.createdAt' : 't.id'
   const direction = query.order === 'asc' ? 'ASC' : 'DESC'
 
   const { rows, total } = runRawList<SummaryRow>(getDatabaseContext().db, {
@@ -614,10 +525,8 @@ export function getArticle(id: number): ArticleDto {
   const category = row.categoryId ? models.category.findById(row.categoryId) : null
 
   return {
-    ...toSummaryDto({ ...row, images: row.images } as SummaryRow),
+    ...toSummaryDto({ ...row } as SummaryRow),
     content: row.content,
-    contentHtml: row.contentHtml,
-    images: parseStringArray(row.images),
     extra: parseExtra(row.extra),
     siteName: site?.name ?? null,
     categoryName: category?.name ?? null,
@@ -632,7 +541,6 @@ export function getArticleRaw(id: number): ArticleRawDto {
     id: row.id,
     url: row.url ?? '',
     html: row.rawHtml ?? '',
-    crawlTime: row.crawlTime,
   }
 }
 
@@ -686,12 +594,8 @@ const CSV_HEADERS = [
   'taskId',
   'author',
   'coverUrl',
-  'publishedAt',
-  'crawlTime',
-  'contentHash',
-  'wordCount',
-  'imageCount',
-  'status',
+  'articleTime',
+  'detailStatus',
   'summary',
   'content',
 ] as const
@@ -750,7 +654,7 @@ export function exportArticles(
       // 直接带 LIMIT/OFFSET：分页页大小在最后一批会变化，不能复用按页计算的 helper
       const rows = db
         .prepare(
-          `SELECT id, title, url, siteId, categoryId, taskId, author, coverUrl, publishedAt, crawlTime, contentHash, wordCount, images, status, summary, content, contentHtml, extra
+          `SELECT id, title, url, siteId, categoryId, taskId, author, coverUrl, articleTime, detailStatus, summary, content, extra
            FROM article t WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
         )
         .all(...params, pageSize, offset) as unknown as ArticleRow[]
@@ -776,12 +680,8 @@ export function exportArticles(
               row.taskId,
               row.author,
               row.coverUrl,
-              row.publishedAt,
-              row.crawlTime,
-              row.contentHash,
-              row.wordCount,
-              parseStringArray(row.images).length,
-              row.status,
+              row.articleTime,
+              row.detailStatus,
               row.summary,
               row.content,
             ]),
@@ -798,15 +698,10 @@ export function exportArticles(
           taskId: row.taskId,
           author: row.author,
           coverUrl: row.coverUrl,
-          publishedAt: row.publishedAt,
-          crawlTime: row.crawlTime,
-          contentHash: row.contentHash,
-          wordCount: row.wordCount,
-          status: row.status,
+          articleTime: row.articleTime,
+          detailStatus: row.detailStatus,
           summary: row.summary,
           content: row.content,
-          contentHtml: row.contentHtml,
-          images: parseStringArray(row.images),
           extra: parseExtra(row.extra),
         }))
         const text = `${first ? '' : ','}${JSON.stringify(payload).slice(1, -1)}`

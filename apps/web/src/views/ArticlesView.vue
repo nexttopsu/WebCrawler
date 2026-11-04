@@ -19,8 +19,6 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import SearchBar from '@/components/common/SearchBar.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
 import DataTable from '@/components/common/DataTable.vue'
-import StatusTag from '@/components/common/StatusTag.vue'
-import { ARTICLE_STATUS_MAP } from '@/config/status'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const router = useRouter()
@@ -31,7 +29,6 @@ const list = useListQuery<
     keyword: string
     siteId?: number
     categoryId?: number
-    status: string
     detailStatus: string
     range: [string, string] | null
   }
@@ -43,14 +40,13 @@ const list = useListQuery<
       keyword: params.keyword || undefined,
       siteId: params.siteId || undefined,
       categoryId: params.categoryId || undefined,
-      status: params.status || undefined,
       detailStatus: (params.detailStatus || undefined) as 'pending' | 'collected' | 'failed' | undefined,
-      crawledFrom: params.range?.[0],
-      crawledTo: params.range?.[1],
-      sort: 'crawlTime',
+      createdFrom: params.range?.[0],
+      createdTo: params.range?.[1],
+      sort: 'createdAt',
       order: 'desc',
     }),
-  { keyword: '', siteId: undefined, categoryId: undefined, status: '', detailStatus: '', range: null },
+  { keyword: '', siteId: undefined, categoryId: undefined, detailStatus: '', range: null },
 )
 
 const siteOptions = ref<SiteDto[]>([])
@@ -146,10 +142,9 @@ async function exportAs(format: 'json' | 'csv'): Promise<void> {
         keyword: list.filters.keyword || undefined,
         siteId: list.filters.siteId || undefined,
         categoryId: list.filters.categoryId || undefined,
-        status: list.filters.status || undefined,
-        crawledFrom: list.filters.range?.[0],
-        crawledTo: list.filters.range?.[1],
-        sort: 'crawlTime',
+        createdFrom: list.filters.range?.[0],
+        createdTo: list.filters.range?.[1],
+        sort: 'createdAt',
         order: 'desc',
       },
       format,
@@ -237,11 +232,6 @@ void loadCategoryOptions()
       >
         <el-option v-for="item in categoryOptions" :key="item.id" :label="item.name" :value="item.id" />
       </el-select>
-      <el-select v-model="list.filters.status" placeholder="全部状态" clearable style="width: 130px" @change="list.search()">
-        <el-option label="待处理" value="pending" />
-        <el-option label="已发布" value="published" />
-        <el-option label="已忽略" value="ignored" />
-      </el-select>
       <el-select
         v-model="list.filters.detailStatus"
         placeholder="详情状态"
@@ -302,32 +292,26 @@ void loadCategoryOptions()
         </template>
       </el-table-column>
 
-      <el-table-column label="作者 / 发布" width="150">
+      <el-table-column label="作者 / 文章时间" width="170">
         <template #default="{ row }">
           <div class="cell-main">
             <span>{{ row.author || '—' }}</span>
-            <span class="wb-muted cell-sub">{{ formatTime(row.publishedAt) }}</span>
+            <span class="wb-muted cell-sub">{{ formatTime(row.articleTime) }}</span>
           </div>
         </template>
       </el-table-column>
 
-      <el-table-column label="字数 / 图" width="112">
+      <el-table-column label="详情状态" width="88">
         <template #default="{ row }">
-          <span class="wb-muted">{{ row.wordCount }} 字 · {{ row.imageCount }} 图</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="状态" width="88">
-        <template #default="{ row }">
-          <StatusTag :status="row.status" :map="ARTICLE_STATUS_MAP" />
+          <span v-if="row.detailStatus === 'collected'" class="detail-badge detail-badge--done">已采集</span>
           <el-tooltip
-            v-if="row.detailStatus === 'pending'"
+            v-else-if="row.detailStatus === 'pending'"
             content="详情未采集（仅列表入库）"
             placement="top"
           >
             <span class="detail-badge detail-badge--pending">详情待采</span>
           </el-tooltip>
-          <el-tooltip v-else-if="row.detailStatus === 'failed'" :content="row.detailError || '详情采集失败'" placement="top">
+          <el-tooltip v-else content="详情采集失败，可重试" placement="top">
             <span class="detail-badge detail-badge--failed">详情失败</span>
           </el-tooltip>
         </template>
@@ -335,7 +319,7 @@ void loadCategoryOptions()
 
       <el-table-column label="采集时间" width="132">
         <template #default="{ row }">
-          <span class="wb-muted">{{ formatTableTime(row.crawlTime ?? row.createdAt) }}</span>
+          <span class="wb-muted">{{ formatTableTime(row.createdAt) }}</span>
         </template>
       </el-table-column>
 
@@ -365,7 +349,7 @@ void loadCategoryOptions()
     >
       <p v-if="deleteMode === 'single'" class="wb-secondary">{{ deleteTarget?.title || '（无标题）' }}</p>
       <p v-else class="wb-secondary">将删除选中的 {{ selected.length }} 篇文章。</p>
-      <p class="wb-secondary">删除后不可恢复，关联的图片地址也会失效。</p>
+      <p class="wb-secondary">删除后不可恢复。</p>
     </ConfirmDialog>
   </div>
 </template>
@@ -425,6 +409,11 @@ void loadCategoryOptions()
   font-size: 11px;
   line-height: 18px;
   width: fit-content;
+}
+
+.detail-badge--done {
+  background: var(--wb-success-bg, #e8f5ec);
+  color: var(--wb-success, #1f7a3d);
 }
 
 .detail-badge--pending {

@@ -11,6 +11,8 @@ import {
   type RequestClient,
 } from '../../src/request/index.js'
 import { CrawlEngine } from '../../src/core/index.js'
+import type { PluginRegistry } from '../../src/plugin-system/index.js'
+import { createParserPluginRunner } from '../../src/server/services/task-executor.js'
 
 const listHtml = readFileSync(new URL('./fixtures/list.html', import.meta.url), 'utf8')
 const detailHtml = readFileSync(new URL('./fixtures/detail.html', import.meta.url), 'utf8')
@@ -163,6 +165,89 @@ describe('采集引擎：列表提取', () => {
     const plain = await engine.listPage(makeContext())
     expect(plain.links[0]?.coverUrl).toBeUndefined()
   })
+
+  it('列表阶段只执行 list.parserPlugins，详情阶段只执行顶层 parserPlugins', async () => {
+    const calls: Array<{ name: string; stage: string }> = []
+    // 最小注册表桩：任何名字都返回一个会记录调用的解析器插件
+    const registry = {
+      getParserPlugin: (name: string) => ({
+        name,
+        type: 'parser',
+        transform: async (input: { data: Record<string, unknown>; stage: string }) => {
+          calls.push({ name, stage: input.stage })
+          return { ...input.data, title: `[${input.stage}] ${String(input.data.title ?? '')}` }
+        },
+      }),
+    } as unknown as PluginRegistry
+    const pluginEngine = new CrawlEngine({
+      request,
+      browser,
+      parserPluginRunner: createParserPluginRunner(registry),
+    })
+
+    const context = makeContext(
+      makeRule({
+        list: {
+          itemSelector: '.news-item',
+          fields: {
+            title: { type: 'text', selector: '.title', required: true },
+            url: { type: 'attr', selector: '.title', attribute: 'href', required: true },
+          },
+          parserPlugins: ['list-decrypt'],
+        },
+        // 顶层插件只作用于详情阶段
+        parserPlugins: ['detail-decrypt'],
+      }),
+    )
+
+    const page = await pluginEngine.listPage(context)
+    expect(page.links[0]?.title).toBe('[list] 第一篇报道')
+    // 列表阶段每个列表项各执行一次，且只执行列表插件
+    expect(calls).toHaveLength(4)
+    expect(calls.every((call) => call.name === 'list-decrypt' && call.stage === 'list')).toBe(true)
+
+    calls.length = 0
+    const result = await pluginEngine.crawlCategory(context)
+    expect(calls.some((call) => call.name === 'detail-decrypt' && call.stage === 'detail')).toBe(true)
+    expect(calls.some((call) => call.name === 'list-decrypt' && call.stage === 'list')).toBe(true)
+    // 详情阶段不会混入列表插件，反之亦然
+    expect(calls.some((call) => call.name === 'list-decrypt' && call.stage === 'detail')).toBe(false)
+    expect(calls.some((call) => call.name === 'detail-decrypt' && call.stage === 'list')).toBe(false)
+    // 详情标题取自详情页字段，只经过详情插件（列表前缀不参与）
+    expect(result.articles[0]?.title).toBe('[detail] 第一篇报道：采集平台上线')
+  })
+
+  it('excludeSelectors 优先级最高：字段提取前先删除命中的节点', async () => {
+    const listFields: Record<string, FieldRule> = {
+      title: { type: 'text', selector: '.title', required: true },
+      url: { type: 'attr', selector: '.title', attribute: 'href', required: true },
+      time: { type: 'text', selector: '.time' },
+    }
+
+    // 未配置排除时 time 能提取到
+    const plain = await engine.listPage(
+      makeContext(makeRule({ list: { itemSelector: '.news-item', fields: listFields } })),
+    )
+    expect((plain.links[0]?.metadata as Record<string, unknown>).time).toBe('2026-01-01')
+
+    // 列表排除 .time：time 字段消失，title / url 不受影响
+    const excluded = await engine.listPage(
+      makeContext(
+        makeRule({ list: { itemSelector: '.news-item', fields: listFields, excludeSelectors: ['.time'] } }),
+      ),
+    )
+    expect(excluded.links[0]?.metadata?.time).toBeUndefined()
+    expect(excluded.links[0]?.title).toBe('第一篇报道')
+    expect(excluded.links[0]?.url).toBe(`${origin}/news/1.html`)
+
+    // 详情排除 .author：author 字段提取不到
+    const context = makeContext(
+      makeRule({ list: { itemSelector: '.news-item', fields: listFields }, excludeSelectors: ['.author'] }),
+    )
+    const result = await engine.crawlCategory(context)
+    expect(result.articles[0]?.author).toBeUndefined()
+    expect(result.articles[0]?.title).toBeTruthy()
+  })
 })
 
 describe('采集引擎：栏目采集', () => {
@@ -180,7 +265,7 @@ describe('采集引擎：栏目采集', () => {
     const article = result.articles[0]!
     expect(article.title).toBe('第一篇报道：采集平台上线')
     expect(article.content).toContain('第一段正文')
-    expect(article.images).toHaveLength(2)
+    expect(article.articleTime).toBe('2026-01-01 10:00')
   })
 
   it('详情页没拍到封面时用列表封面兜底', async () => {
@@ -270,7 +355,7 @@ describe('采集引擎：浏览器模式', () => {
     const result = await engine.parseDetail(context, { url: `${origin}/spa`, sourceUrl: origin })
     expect(result.article?.title).toBe('脚本渲染的标题')
     expect(result.article?.content).toContain('脚本文本')
-    expect(result.article?.html).not.toContain('广告')
+    expect(result.article?.content).not.toContain('广告')
   }, 60_000)
 
   it('未启用浏览器时明确报错，不静默降级', async () => {

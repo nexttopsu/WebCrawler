@@ -17,9 +17,6 @@ function detail(url: string, overrides: Partial<ArticleData> = {}): ArticleData 
     title: '详情标题',
     url,
     content: '详情正文，内容足够长。',
-    html: '<p>详情正文</p>',
-    images: ['https://example.com/images/detail.png'],
-    crawlTime: '2026-02-01T00:00:00.000Z',
     ...overrides,
   }
 }
@@ -97,41 +94,34 @@ describe('列表 / 详情分离采集', () => {
     expect(row?.title).toBe('列表标题 B')
     expect(row?.author).toBe('详情作者')
     expect(row?.detailStatus).toBe('collected')
-    expect(row?.detailCollectedAt).not.toBeNull()
     expect(JSON.parse(row?.extra ?? '{}')).toMatchObject({ listTag: '详情覆盖', fromDetail: 'yes' })
   })
 
-  it('详情内容未变化时 skipped，详情状态仍置为已采集', () => {
-    applyArticleDetail({
+  it('详情补采重复执行：同 URL 再次入库为 updated，详情状态保持已采集', () => {
+    const first = applyArticleDetail({
       article: detail('https://example.com/article/c'),
       siteId: site.id,
       categoryId: category.id,
       taskId: null,
     })
-    // 首条详情是直接创建的（无历史 Hash），第二次补齐 Hash，第三次命中「未变化」
-    applyArticleDetail({
-      article: detail('https://example.com/article/c'),
-      siteId: site.id,
-      categoryId: category.id,
-      taskId: null,
-    })
+    expect(first.status).toBe('created')
+
     const outcome = applyArticleDetail({
       article: detail('https://example.com/article/c'),
       siteId: site.id,
       categoryId: category.id,
       taskId: null,
     })
+    expect(outcome.status).toBe('updated')
 
-    expect(outcome.status).toBe('skipped')
     const row = getModels().article.findOne({ url: 'https://example.com/article/c' })
     expect(row?.detailStatus).toBe('collected')
   })
 
   it('失败标记与待补采查询', () => {
-    markArticleDetailFailed('https://example.com/article/a', 'HTTP 500')
+    markArticleDetailFailed('https://example.com/article/a')
     const row = getModels().article.findOne({ url: 'https://example.com/article/a' })
     expect(row?.detailStatus).toBe('failed')
-    expect(row?.detailError).toContain('HTTP 500')
 
     const pending = listArticlesForDetailCollect({ siteId: site.id, categoryId: category.id, limit: 100 })
     const urls = pending.map((item) => item.url)

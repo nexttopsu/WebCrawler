@@ -1,0 +1,11 @@
+{
+  "name": "test-plugin",
+  "version": "1.0.0",
+  "type": "source",
+  "entry": "index.js",
+  "description": "测试插件：验证插件扫描、登记与采集契约的示例站点插件",
+  "coreVersion": "^0.6.0",
+  "config": {
+    "domains": ["example.com", "127.0.0.1"]
+  }
+}

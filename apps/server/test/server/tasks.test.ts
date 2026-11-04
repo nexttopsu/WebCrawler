@@ -143,9 +143,9 @@ describe('采集任务', () => {
     const detailArticle = await call(app, `/api/articles/${first.id}`)
     expect(detailArticle.body.data.content).toContain('城市更新项目')
     expect(detailArticle.body.data.content).not.toContain('广告位')
-    expect(detailArticle.body.data.images).toHaveLength(1)
-    expect(detailArticle.body.data.images[0]).toContain('/images/1.png')
-    expect(detailArticle.body.data.publishedAt).toMatch(/^2026-01-01T/)
+    expect(detailArticle.body.data.articleTime).toMatch(/^2026-01-01T/)
+    // 规则未映射封面时允许为空，不再回退正文首图
+    expect(detailArticle.body.data.coverUrl).toBeNull()
 
     const raw = await call(app, `/api/articles/${first.id}/raw`)
     expect(raw.body.data.html).toContain('article-title')
