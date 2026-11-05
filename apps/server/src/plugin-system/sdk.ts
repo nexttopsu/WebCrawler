@@ -11,7 +11,9 @@
  *
  * 编辑器里的补全来自 `PluginContext`：`ctx.request` 有 `get / post / getText / getJson`
  * （纯 HTTP，已绑定本次代理），`ctx.fetchPage` 按当前模式抓页面（browser 模式会执行 JS），
- * `ctx.parser` 有 `parseHtml / selectAll / cleanText / resolveUrl`，不用猜。
+ * `ctx.parser` 有 `parseHtml / selectAll / cleanText / resolveUrl`，
+ * `ctx.html2object` + `ctx.schema` 可以按 schema 一次解析整页 HTML，
+ * `ctx.site` / `ctx.category` / `ctx.rule` / `ctx.requestOptions` 是本次运行的页面配置快照，不用猜。
  */
 import type {
   ArticleFields,

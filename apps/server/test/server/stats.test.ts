@@ -26,7 +26,7 @@ describe('统计概览', () => {
 
     const data = response.body.data
     // 插件是内置的，空库也有 3 个
-    expect(data.counts).toEqual({ sites: 0, categories: 0, articles: 0, tasks: 0, proxies: 0, plugins: 3 })
+    expect(data.counts).toEqual({ sites: 0, categories: 0, articles: 0, tasks: 0, proxies: 0, plugins: 4 })
     expect(data.today).toEqual({ articles: 0, tasks: 0 })
     expect(data.running).toEqual({ tasks: 0, pending: 0 })
     expect(data.successRate).toBeNull()

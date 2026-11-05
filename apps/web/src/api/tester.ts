@@ -14,10 +14,10 @@ import type {
   TesterListResultDto,
 } from '@webcrawler/shared'
 
-/** 代理摘要（服务端只暴露协议/主机/端口，凭据不出 DTO）。 */
+/** 代理摘要（与 ProxyDto 对齐：type 为协议；凭据不出 DTO）。 */
 export interface ProxyItem {
   id: number
-  protocol: string
+  type: string
   host: string
   port: number
   status: string

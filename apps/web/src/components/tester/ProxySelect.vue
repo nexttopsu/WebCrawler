@@ -13,7 +13,7 @@ const model = defineModel<number | null>({ default: null })
 const proxies = ref<ProxyItem[]>([])
 
 function proxyLabel(option: ProxyItem): string {
-  return `#${option.id} ${option.protocol}://${option.host}:${option.port}`
+  return `#${option.id} ${option.type}://${option.host}:${option.port}`
 }
 
 onMounted(async () => {

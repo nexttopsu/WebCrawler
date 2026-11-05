@@ -306,13 +306,13 @@ async function runListTest(): Promise<void> {
 }
 
 function buildPagination():
-    | { type: 'query'; parameter: string; maxPages?: number }
-    | { type: 'path'; pathPattern: string; maxPages?: number } {
-  const { paginationType, paginationParameter, paginationPathPattern, maxPages } = draft.value.list
+    | { type: 'query'; parameter: string }
+    | { type: 'path'; pathPattern: string } {
+  const { paginationType, paginationParameter, paginationPathPattern } = draft.value.list
   if (paginationType === 'path') {
-    return { type: 'path', pathPattern: paginationPathPattern || '/page/{page}', ...(maxPages ? { maxPages } : {}) }
+    return { type: 'path', pathPattern: paginationPathPattern || '/page/{page}' }
   }
-  return { type: 'query', parameter: paginationParameter || 'page', ...(maxPages ? { maxPages } : {}) }
+  return { type: 'query', parameter: paginationParameter || 'page' }
 }
 
 function pickDetail(url: string): void {
@@ -446,13 +446,6 @@ function setPaginationType(value: unknown): void {
   draft.value.list.paginationType = value === 'query' || value === 'path' ? value : 'none'
 }
 
-const maxPagesModel = computed<number | undefined>({
-  get: () => draft.value.list.maxPages ?? undefined,
-  set: (value) => {
-    draft.value.list.maxPages = typeof value === 'number' ? value : null
-  },
-})
-
 /* ------------------------------ 规则组装与保存 ------------------------------ */
 
 /**
@@ -580,7 +573,6 @@ function onImported(config: CrawlRuleConfig): void {
   }
   draft.value.list.paginationParameter = pagination?.parameter ?? 'page'
   draft.value.list.paginationPathPattern = pagination?.pathPattern ?? '/page/{page}'
-  draft.value.list.maxPages = pagination?.maxPages ?? null
   draft.value.parserPlugins = Array.isArray(config.parserPlugins)
     ? config.parserPlugins.filter((name): name is string => typeof name === 'string')
     : []
@@ -825,19 +817,10 @@ const requestInfo = computed(() => {
                       class="pg-field"
                       placeholder="/page/{page}"
                     />
-                    <template v-if="draft.list.paginationType !== 'none'">
-                      <span class="pg-label">最多</span>
-                      <el-input-number
-                        v-model="maxPagesModel"
-                        class="pg-max"
-                        :min="1"
-                        :max="100"
-                        controls-position="right"
-                      />
-                      <span class="pg-label">页</span>
-                    </template>
                   </div>
-                  <p class="tester-field__hint">测试时只抓取当前页；分页配置随保存的规则在采集任务中生效。</p>
+                  <p class="tester-field__hint">
+                    测试时只抓取当前页；抓取页数范围由采集任务的「开始分页 / 结束分页」控制。
+                  </p>
                 </div>
               </el-collapse-item>
             </el-collapse>
@@ -1157,15 +1140,6 @@ const requestInfo = computed(() => {
 .pg-field {
   flex: 1;
   min-width: 150px;
-}
-
-.pg-label {
-  font-size: 12px;
-  color: var(--wb-text-muted);
-}
-
-.pg-max {
-  width: 110px;
 }
 
 /* 抽屉：结果面板撑满、保存面板随内容滚动 */

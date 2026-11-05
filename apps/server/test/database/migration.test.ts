@@ -181,7 +181,8 @@ describe('第一阶段数据库升级', () => {
         expect(config.fields.content?.type).toBe('html')
         expect(config.request?.encoding).toBe('gbk')
         expect(config.request?.headers?.referer).toBe('https://old.example.com')
-        expect(config.pagination?.maxPages).toBe(5)
+        // 旧版「最多 n 页」已移除：迁移不再写入 pagination
+        expect(config.pagination).toBeUndefined()
         expect(rule?.version).toBe(1)
 
         // 规则版本：为转换后的配置补一条版本记录

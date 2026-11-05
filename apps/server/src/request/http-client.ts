@@ -4,13 +4,12 @@
  * 基于 request-pack：用它创建配置好的 axios 实例、复用它的编码嗅探与 URL 工具。
  * 这里额外做三件事，request-pack 本身不提供：
  * 1. 手动跟随重定向，每一跳都重新做 SSRF 校验（request-pack 交给 axios 自动跟随）；
- * 2. 流式读取并限制响应体大小（避免大文件打爆内存）；
+ * 2. 非流式接收完整响应体，整体校验大小上限（超限报错，绝不截断）；
  * 3. 只对幂等请求重试（POST 绝不自动重试，防止重复提交）。
  */
 import { Agent as HttpAgent } from 'node:http'
 import { Agent as HttpsAgent } from 'node:https'
 import { rootCertificates } from 'node:tls'
-import type { Readable } from 'node:stream'
 import { createHttp, detectCharset, utils } from 'request-pack'
 import type { ProxySettings } from '../shared/index.js'
 import {
@@ -80,57 +79,27 @@ function normalizeHeaders(raw: Record<string, unknown> | undefined): Record<stri
   return headers
 }
 
-/** 读取响应流，超过上限立即中断。 */
-async function readStreamWithLimit(stream: Readable, maxBytes: number, url: string): Promise<Buffer> {
-  const chunks: Buffer[] = []
-  let total = 0
-
-  return new Promise<Buffer>((resolve, reject) => {
-    const onData = (chunk: Buffer | string): void => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      total += buffer.byteLength
-      if (total > maxBytes) {
-        stream.destroy()
-        reject(
-          new RequestError(
-            RequestErrorCode.RESPONSE_TOO_LARGE,
-            `响应体超过上限（${maxBytes} 字节）`,
-            { url, retryable: false, details: { maxBytes } },
-          ),
-        )
-        return
-      }
-      chunks.push(buffer)
-    }
-
-    stream.on('data', onData)
-    stream.once('error', (error) => {
-      reject(
-        new RequestError(RequestErrorCode.CONNECTION_FAILED, `读取响应失败：${error.message}`, {
-          url,
-          cause: error,
-        }),
-      )
-    })
-    stream.once('end', () => {
-      cleanup()
-      resolve(Buffer.concat(chunks))
-    })
-    stream.once('close', () => {
-      // 流被主动销毁（超限）时不再 resolve
-      cleanup()
-    })
-
-    function cleanup(): void {
-      stream.off('data', onData)
-    }
-  })
-}
-
-/** 丢弃响应体，释放连接。 */
-function drain(stream: Readable): void {
-  if (typeof stream.resume === 'function') stream.resume()
-  stream.destroy?.()
+/**
+ * 校验完整响应体大小：超过上限报明确错误，绝不返回被截断的内容。
+ *
+ * 客户端不做流式读取——一次性接收全部内容后整体校验；
+ * 若响应头声明的大小已超限，直接快速失败，不浪费带宽。
+ */
+function assertBodyWithinLimit(
+  headers: Record<string, string>,
+  body: Buffer,
+  maxBytes: number,
+  url: string,
+): void {
+  const declared = Number(headers['content-length'])
+  const size = Number.isFinite(declared) && declared > 0 ? declared : body.byteLength
+  if (size > maxBytes) {
+    throw new RequestError(
+      RequestErrorCode.RESPONSE_TOO_LARGE,
+      `响应体超过上限（${maxBytes} 字节）`,
+      { url, retryable: false, details: { maxBytes, actualBytes: body.byteLength } },
+    )
+  }
 }
 
 /** 单跳结果。 */
@@ -505,14 +474,15 @@ export class RequestClient {
     transport: Record<string, unknown>
   }): Promise<HopResult> {
     const { method, url, payload, headers, timeoutMs, signal, maxBytes, startedAt, transport } = args
-    const response = await this.http.instance.request<Readable>({
+    // 非流式：一次性接收完整响应体（axios 负责解压），不做逐块读取与中断
+    const response = await this.http.instance.request<ArrayBuffer>({
       url,
       method,
       headers,
       data: payload,
       timeout: timeoutMs,
       signal,
-      responseType: 'stream',
+      responseType: 'arraybuffer',
       maxRedirects: 0,
       maxContentLength: -1,
       maxBodyLength: -1,
@@ -534,7 +504,6 @@ export class RequestClient {
       const isRedirect = REDIRECT_STATUS.has(response.status)
 
       if (isRedirect && location) {
-        drain(response.data)
         return {
           status: response.status,
           headers: headersNormalized,
@@ -545,9 +514,8 @@ export class RequestClient {
         }
       }
 
-      const buffer = REDIRECT_STATUS.has(response.status)
-        ? Buffer.alloc(0)
-        : await readStreamWithLimit(response.data, maxBytes, url)
+      const buffer = Buffer.from(response.data)
+      assertBodyWithinLimit(headersNormalized, buffer, maxBytes, url)
 
       return {
         status: response.status,

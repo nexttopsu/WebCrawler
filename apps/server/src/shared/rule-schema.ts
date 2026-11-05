@@ -182,7 +182,6 @@ export const paginationSchema = z
       .regex(/^[A-Za-z_][A-Za-z0-9_-]{0,31}$/, '页码参数名不合法')
       .optional(),
     start: z.number().int().min(1).max(10_000).optional(),
-    maxPages: z.number().int().min(1).max(100).optional(),
     pathPattern: z.string().trim().min(1).max(300).optional(),
     nextSelector: selectorSchema.optional(),
     cursorParameter: z
@@ -492,9 +491,39 @@ export type RuleConfigParseResult =
   | { success: true; config: CrawlRuleConfig }
   | { success: false; issues: Array<{ path: string; message: string }> }
 
+/**
+ * 清洗历史遗留的分页字段。
+ *
+ * 旧版规则允许在 `pagination` / `list.pagination` 里写 `maxPages`，
+ * 现在页数范围统一由任务的「开始分页 / 结束分页」控制；
+ * 这里在解析前静默丢弃该字段，保证存量规则仍能通过 strict 校验。
+ */
+function stripLegacyPaginationFields(input: unknown): unknown {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return input
+  const clone: Record<string, unknown> = { ...(input as Record<string, unknown>) }
+  for (const key of ['pagination'] as const) {
+    const value = clone[key]
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const { maxPages: _ignored, ...rest } = value as Record<string, unknown>
+      clone[key] = rest
+    }
+  }
+  const list = clone.list
+  if (typeof list === 'object' && list !== null && !Array.isArray(list)) {
+    const listClone = { ...(list as Record<string, unknown>) }
+    const pagination = listClone.pagination
+    if (typeof pagination === 'object' && pagination !== null && !Array.isArray(pagination)) {
+      const { maxPages: _ignored, ...rest } = pagination as Record<string, unknown>
+      listClone.pagination = rest
+    }
+    clone.list = listClone
+  }
+  return clone
+}
+
 /** 校验规则配置。写入规则、规则测试、任务覆盖规则都先过这一关。 */
 export function parseRuleConfig(input: unknown): RuleConfigParseResult {
-  const result = crawlRuleConfigSchema.safeParse(input)
+  const result = crawlRuleConfigSchema.safeParse(stripLegacyPaginationFields(input))
   if (!result.success) {
     return {
       success: false,
@@ -517,6 +546,6 @@ export function createDefaultRuleConfig(): CrawlRuleConfig {
   return {
     version: RULE_SCHEMA_VERSION,
     request: { mode: 'http', method: 'GET', timeoutMs: 15_000 },
-    pagination: { type: 'none', maxPages: 1 },
+    pagination: { type: 'none' },
   }
 }

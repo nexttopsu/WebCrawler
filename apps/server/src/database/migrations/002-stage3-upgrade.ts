@@ -143,10 +143,6 @@ function buildLegacyConfig(row: LegacyRuleRow): Record<string, unknown> | null {
   }
   if (Object.keys(request).length > 0) config.request = request
 
-  if (typeof row.pageLimit === 'number' && row.pageLimit > 1) {
-    config.pagination = { type: 'none', maxPages: Math.min(row.pageLimit, 100) }
-  }
-
   return config
 }
 

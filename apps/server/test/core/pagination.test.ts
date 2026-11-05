@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPageUrl,
+  buildPageUrlRange,
   buildPageUrls,
   PaginationError,
-  resolveMaxPages,
 } from '../../src/core/task/pagination.js'
 
 describe('分页地址生成', () => {
@@ -62,10 +62,40 @@ describe('分页地址生成', () => {
     expect(buildPageUrls('https://example.com/news', { type: 'none' }, 5)).toHaveLength(1)
   })
 
-  it('resolveMaxPages 优先使用任务覆盖值', () => {
-    expect(resolveMaxPages(undefined)).toBe(1)
-    expect(resolveMaxPages({ type: 'query', maxPages: 5 })).toBe(5)
-    expect(resolveMaxPages({ type: 'query', maxPages: 5 }, 2)).toBe(2)
-    expect(resolveMaxPages({ type: 'query', maxPages: 0 })).toBe(1)
+  it('buildPageUrlRange 只生成区间内的页码', () => {
+    expect(
+      buildPageUrlRange('https://example.com/news', { type: 'query' }, 2, 4),
+    ).toEqual([
+      'https://example.com/news?page=2',
+      'https://example.com/news?page=3',
+      'https://example.com/news?page=4',
+    ])
+  })
+
+  it('buildPageUrlRange：endPage 小于 startPage 时收敛为单页', () => {
+    expect(
+      buildPageUrlRange('https://example.com/news', { type: 'query' }, 3, 1),
+    ).toEqual(['https://example.com/news?page=3'])
+  })
+
+  it('buildPageUrlRange：none 分页不含第 1 页时返回空数组', () => {
+    expect(buildPageUrlRange('https://example.com/news', { type: 'none' }, 2, 5)).toEqual([])
+    expect(buildPageUrlRange('https://example.com/news', { type: 'none' }, 1, 5)).toEqual([
+      'https://example.com/news',
+    ])
+  })
+
+  it('buildPageUrlRange：path 模板按区间页码替换', () => {
+    expect(
+      buildPageUrlRange(
+        'https://example.com/news/index.html',
+        { type: 'path', pathPattern: '/news/page/{page}' },
+        3,
+        4,
+      ),
+    ).toEqual([
+      'https://example.com/news/page/3',
+      'https://example.com/news/page/4',
+    ])
   })
 })

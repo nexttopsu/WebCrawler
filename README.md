@@ -280,7 +280,7 @@ pnpm --filter @webcrawler/core demo:crawl
   "version": 1,
   "request": { "mode": "http", "timeoutMs": 15000, "headers": { "referer": "https://example.com/" } },
   "list": { "itemSelector": ".news-item", "linkSelector": "a", "titleSelector": ".title" },
-  "pagination": { "type": "query", "parameter": "page", "start": 1, "maxPages": 5 },
+  "pagination": { "type": "query", "parameter": "page", "start": 1 },
   "detail": {
     "fields": {
       "title": { "type": "text", "selector": "h1", "required": true },
@@ -310,9 +310,11 @@ pnpm --filter @webcrawler/core demo:crawl
 | 类型 | 配置校验 | 说明 |
 | --- | --- | --- |
 | `none` | 通过 | 不翻页，默认值 |
-| `query` | 通过 | 需要 `parameter`（页码参数名），可配 `start` / `maxPages` |
+| `query` | 通过 | 需要 `parameter`（页码参数名），可配 `start`（起始页码） |
 | `path` | 通过 | 需要 `pathPattern`（如 `/page/{page}`），校验生成地址与站点同源 |
 | `next` / `cursor` | **拒绝** | 返回 400「分页类型 next 尚未实现」，绝不静默当作单页 |
+
+抓取页数范围不写在规则里，由采集任务的「开始分页 / 结束分页」执行参数控制。
 
 本阶段只做「配置可被可靠校验与保存」，多页抓取执行在后续阶段接入同一份配置；
 因此现在保存 `query` / `path` 不会报错，但试采与采集引擎仍只抓取入口页。

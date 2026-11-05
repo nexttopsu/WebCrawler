@@ -26,13 +26,6 @@ export function isExecutablePagination(pagination: PaginationConfig | undefined)
   return pagination.type === 'none' || pagination.type === 'query' || pagination.type === 'path'
 }
 
-/** 当前配置最多抓多少页（至少 1）。 */
-export function resolveMaxPages(pagination: PaginationConfig | undefined, override?: number): number {
-  if (override !== undefined && Number.isFinite(override)) return Math.max(1, Math.floor(override))
-  if (pagination?.maxPages !== undefined) return Math.max(1, Math.floor(pagination.maxPages))
-  return 1
-}
-
 /**
  * 生成第 N 页地址（N 从 1 开始）。
  *
@@ -53,7 +46,7 @@ export function buildPageUrl(
 
   if (pagination.type === 'next' || pagination.type === 'cursor') {
     throw new PaginationError(
-      `分页类型 ${pagination.type} 尚未实现，请改为 query 或 path，或设置 maxPages=1`,
+      `分页类型 ${pagination.type} 尚未实现，请改为 query 或 path`,
     )
   }
 
@@ -97,9 +90,26 @@ export function buildPageUrls(
   pagination: PaginationConfig | undefined,
   maxPages: number,
 ): string[] {
+  return buildPageUrlRange(listUrl, pagination, 1, maxPages)
+}
+
+/**
+ * 生成 `[startPage, endPage]` 闭区间的分页地址序列（页码从 1 开始）。
+ *
+ * - 区间最多 500 页，超出会被截断；
+ * - `none` 分页只有第 1 页，区间不含第 1 页时返回空数组；
+ * - 遇到 `null`（没有该页）立即停止；不支持的类型抛 `PaginationError`。
+ */
+export function buildPageUrlRange(
+  listUrl: string,
+  pagination: PaginationConfig | undefined,
+  startPage: number,
+  endPage: number,
+): string[] {
+  const from = Math.max(1, Math.floor(startPage))
+  const to = Math.min(Math.max(Math.floor(endPage), from), from + 499)
   const urls: string[] = []
-  const limit = Math.max(1, Math.min(maxPages, 500))
-  for (let page = 1; page <= limit; page += 1) {
+  for (let page = from; page <= to; page += 1) {
     const url = buildPageUrl(listUrl, pagination, page)
     if (!url) break
     urls.push(url)

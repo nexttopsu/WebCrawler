@@ -203,6 +203,81 @@ describe('全流程插件的 ctx', () => {
     await runner({ pluginId: 'flow', slot: 'list', url: 'https://example.com/list', context: makeContext() })
     expect(seen[0]?.proxy).toBeNull()
   })
+
+  it('ctx.html2object + ctx.schema 能按 schema 解析整页', async () => {
+    const { client } = createFakeRequest()
+    const runner = createFlowPluginRunner(
+      createRegistry(
+        {
+          config: { id: 'flow', name: 'flow', type: 'flow' },
+          getDetail: async (_url, ctx) => {
+            const html = `<html><body>
+              <h1 class="title">标题一</h1>
+              <span class="tag">A</span><span class="tag">B</span>
+              <p class="missing"></p>
+            </body></html>`
+            const data = ctx.html2object(html, {
+              title: ctx.schema.text('.title'),
+              tags: ctx.schema.loop('.tag', ctx.schema.text('')),
+              author: ctx.schema.nullable(ctx.schema.text('.author')),
+            })
+            return { title: `${data.title}|${data.tags.join(',')}`, content: String(data.author) }
+          },
+        },
+        'flow',
+      ),
+      client,
+    )
+
+    const result = (await runner({
+      pluginId: 'flow',
+      slot: 'detail',
+      url: 'https://example.com/a',
+      context: makeContext(),
+    })) as { title: string; content: string }
+
+    expect(result.title).toBe('标题一|A,B')
+    // nullable：未匹配返回 null 而不是空字符串
+    expect(result.content).toBe('null')
+  })
+
+  it('ctx 注入本次运行的页面配置（站点 / 栏目 / 规则 / 请求配置）', async () => {
+    const { client } = createFakeRequest()
+    let captured: PluginContext | null = null
+
+    const runner = createFlowPluginRunner(
+      createRegistry(
+        {
+          config: { id: 'flow', name: 'flow', type: 'flow' },
+          getList: async (_url, ctx) => {
+            captured = ctx
+            return []
+          },
+        },
+        'flow',
+      ),
+      client,
+    )
+
+    await runner({
+      pluginId: 'flow',
+      slot: 'list',
+      url: 'https://example.com/list',
+      context: makeContext({
+        rule: { version: 3, config: { version: 1, collectScope: 'full' } },
+        requestOptions: { mode: 'browser', timeoutMs: 8000 },
+      }),
+    })
+
+    expect(captured!.site).toEqual({ id: '1', name: '测试站', domain: 'example.com', baseUrl: 'https://example.com' })
+    expect(captured!.category).toMatchObject({ id: '2', name: '栏目', listUrl: 'https://example.com/list' })
+    expect(captured!.rule.version).toBe(3)
+    expect(captured!.rule.config.collectScope).toBe('full')
+    expect(captured!.requestOptions).toEqual({ mode: 'browser', timeoutMs: 8000 })
+    // 便捷字段与快照保持一致
+    expect(captured!.siteId).toBe(captured!.site.id)
+    expect(captured!.categoryId).toBe(captured!.category.id)
+  })
 })
 
 describe('解析器插件的 ctx', () => {

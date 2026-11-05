@@ -18,7 +18,7 @@ const base: CrawlRuleConfig = {
   list: {
     itemSelector: '.item',
     linkSelector: 'a',
-    pagination: { type: 'query', parameter: 'page', maxPages: 5 },
+    pagination: { type: 'query', parameter: 'page' },
   },
   clean: { removeSelectors: ['.ad', '.sidebar'], keepImages: true },
   detail: {

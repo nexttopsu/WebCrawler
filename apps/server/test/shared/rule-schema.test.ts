@@ -23,7 +23,6 @@ const exampleConfig = {
       type: 'query',
       parameter: 'page',
       start: 1,
-      maxPages: 10,
     },
   },
   detail: {
@@ -190,6 +189,22 @@ describe('分页校验', () => {
 
   it('未设置分页时返回空错误列表', () => {
     expect(checkPagination(undefined)).toEqual([])
+  })
+
+  it('旧版规则的 maxPages 字段被静默清洗，不再阻塞保存', () => {
+    const result = parseRuleConfig({
+      version: 1,
+      list: {
+        itemSelector: '.item',
+        linkSelector: 'a',
+        pagination: { type: 'query', parameter: 'page', maxPages: 10 },
+      },
+      pagination: { type: 'query', parameter: 'page', maxPages: 10 },
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.config.list?.pagination).toEqual({ type: 'query', parameter: 'page' })
+    expect(result.config.pagination).toEqual({ type: 'query', parameter: 'page' })
   })
 
   it('list.pagination 与顶层 pagination 不允许不同值', () => {

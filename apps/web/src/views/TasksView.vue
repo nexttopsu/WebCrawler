@@ -117,10 +117,10 @@ const form = reactive({
   categoryIds: [] as number[],
   urlsText: '',
   name: '',
-  limit: 0,
-  maxPages: 0,
-  retries: 1,
-  rateLimitMs: 0,
+  startPage: 1,
+  endPage: 0,
+  retries: 2,
+  rateLimitMs: 100,
   publishedAfter: '',
   incremental: false,
   followPagination: true,
@@ -175,10 +175,10 @@ function openCreate(): void {
     categoryIds: [],
     urlsText: '',
     name: '',
-    limit: 0,
-    maxPages: 0,
-    retries: 1,
-    rateLimitMs: 0,
+    startPage: 1,
+    endPage: 0,
+    retries: 2,
+    rateLimitMs: 100,
     publishedAfter: '',
     incremental: false,
     followPagination: true,
@@ -206,13 +206,17 @@ async function submit(): Promise<void> {
     }
   }
   if (needSite.value && !form.siteId) return
+  if (form.endPage > 0 && form.endPage < form.startPage) {
+    ElMessage.warning('结束分页不能小于开始分页')
+    return
+  }
 
   const options: Record<string, unknown> = {
     followPagination: form.followPagination,
     retries: form.retries,
   }
-  if (form.limit > 0) options.limit = form.limit
-  if (form.maxPages > 0) options.maxPages = form.maxPages
+  if (form.startPage > 1) options.startPage = form.startPage
+  if (form.endPage > 0) options.endPage = form.endPage
   if (form.rateLimitMs > 0) options.rateLimitMs = form.rateLimitMs
   if (form.publishedAfter) options.publishedAfter = new Date(form.publishedAfter).toISOString()
   if (form.type === 'incremental') options.incremental = true
@@ -574,14 +578,14 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
           <el-collapse-item name="options" title="执行参数（可选）">
             <div class="option-grid">
               <label class="option-item">
-                <span>每栏目上限</span>
-                <el-input-number v-model="form.limit" :min="0" :step="10" controls-position="right" />
-                <small>0 表示不限制</small>
+                <span>开始分页</span>
+                <el-input-number v-model="form.startPage" :min="1" :step="1" controls-position="right" />
+                <small>从第几页开始抓</small>
               </label>
               <label class="option-item">
-                <span>分页页数上限</span>
-                <el-input-number v-model="form.maxPages" :min="0" :step="1" controls-position="right" />
-                <small>覆盖规则里的页数</small>
+                <span>结束分页</span>
+                <el-input-number v-model="form.endPage" :min="0" :step="1" controls-position="right" />
+                <small>0 表示只抓 1 页</small>
               </label>
               <label class="option-item">
                 <span>单篇重试</span>

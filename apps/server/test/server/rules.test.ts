@@ -221,7 +221,7 @@ describe('规则继承', () => {
       config: sampleConfig({
         list: {
           itemSelector: '.site-item',
-          pagination: { type: 'query', parameter: 'page', maxPages: 3 },
+          pagination: { type: 'query', parameter: 'page' },
         },
         detail: { fields: { title: { type: 'text', selector: 'h1' }, content: { type: 'html', selector: '.c' } } },
       }),

@@ -1,7 +1,7 @@
 import { getModels } from '../../database/index.js'
 import {
   AbortedError,
-  buildPageUrls,
+  buildPageUrlRange,
   CrawlEngine,
   createParser,
   delay,
@@ -20,6 +20,16 @@ import {
   type RequestClient,
 } from '../../request/index.js'
 import { describePlugin, type PluginContext, type PluginRegistry } from '../../plugin-system/index.js'
+import {
+  attr as rpAttr,
+  html2object as rpHtml2Object,
+  html as rpHtml,
+  json as rpJson,
+  loop as rpLoop,
+  nullable as rpNullable,
+  object as rpObject,
+  text as rpText,
+} from 'request-pack'
 import {
   CollectScope,
   CrawlTaskStatus,
@@ -144,6 +154,22 @@ function buildPluginContext(
     proxy,
     mode: resolveRequestMode(context),
     parser: services.parser,
+    // request-pack 的整页解析能力原样注入：插件按 schema 解析页面不用再引依赖
+    html2object: rpHtml2Object,
+    schema: {
+      text: rpText,
+      html: rpHtml,
+      attr: rpAttr,
+      json: rpJson,
+      loop: rpLoop,
+      object: rpObject,
+      nullable: rpNullable,
+    },
+    // 本次运行的页面配置快照：站点 / 栏目 / 生效规则 / 请求配置，插件可以按需读取
+    site: context.site,
+    category: context.category,
+    rule: context.rule,
+    requestOptions: context.requestOptions,
     logger: {
       info: (message: string) => context.logger.info(message),
       warn: (message: string) => context.logger.warn(message),
@@ -368,12 +394,12 @@ export class TaskExecutor {
             pageUrls = target.urls
           } else {
             const pagination = category.config.list?.pagination ?? category.config.pagination
-            const maxPages =
-              options.maxPages ?? pagination?.maxPages ?? 1
+            const startPage = Math.max(1, options.startPage ?? 1)
+            const endPage = options.endPage ?? options.maxPages ?? 1
             pageUrls =
               options.followPagination === false
                 ? [category.listUrl]
-                : buildPageUrls(category.listUrl, pagination, maxPages)
+                : buildPageUrlRange(category.listUrl, pagination, startPage, endPage)
           }
         } catch (error) {
           const info = errorInfo(error)
@@ -733,11 +759,12 @@ export class TaskExecutor {
           pageUrls = target.urls
         } else {
           const pagination = category.config.list?.pagination ?? category.config.pagination
-          const maxPages = input.options.maxPages ?? pagination?.maxPages ?? 1
+          const startPage = Math.max(1, input.options.startPage ?? 1)
+          const endPage = input.options.endPage ?? input.options.maxPages ?? 1
           pageUrls =
             input.options.followPagination === false
               ? [category.listUrl]
-              : buildPageUrls(category.listUrl, pagination, maxPages)
+              : buildPageUrlRange(category.listUrl, pagination, startPage, endPage)
         }
       } catch (error) {
         const info = errorInfo(error)

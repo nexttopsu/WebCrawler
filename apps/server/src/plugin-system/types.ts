@@ -22,8 +22,26 @@
  * 这样代理、限速、SSRF 校验与超时重试仍然由平台统一负责。
  */
 import type { Parser } from '../core/index.js'
+import type {
+  CategorySnapshot,
+  CrawlRequestOptions,
+  RuleSnapshot,
+  SiteSnapshot,
+} from '../shared/index.js'
 import type { ProxySettings, RequestMode } from '../shared/index.js'
 import type { ScopedRequestClient } from '../request/index.js'
+import type {
+  AttrField,
+  Field,
+  HtmlField,
+  JsonField,
+  LoopField,
+  ObjectField,
+  ParsedResult,
+  QueryOptions,
+  Schema as Html2ObjectSchema,
+  TextField,
+} from 'request-pack'
 
 /** 插件类型：全流程 / 解析器。 */
 export type PluginType = 'flow' | 'parser'
@@ -59,6 +77,48 @@ export interface PluginFetchedPage {
   status: number
 }
 
+/**
+ * `request-pack` 的 `html2object`：按 schema 把整页 HTML 一次解析成结构化对象，
+ * 结果类型自动推导。与 `ctx.schema` 搭配使用，插件里不需要再 import request-pack。
+ *
+ * ```ts
+ * const data = ctx.html2object(page.html, {
+ *   title: ctx.schema.text('h1'),
+ *   author: ctx.schema.nullable(ctx.schema.text('.author')),
+ *   tags: ctx.schema.loop('.tag', ctx.schema.text('')),
+ * })
+ * ```
+ */
+export type Html2ObjectFn = <S extends Html2ObjectSchema>(
+  html: string,
+  schema: S,
+  removeSelector?: string[],
+) => ParsedResult<S>
+
+/**
+ * `html2object` 的 schema 字段构造器集合（request-pack 同名函数的原样注入）。
+ *
+ * 页面解析配置全部在这里拼：单值 `text / html / attr / json`，
+ * 列表 `loop`，嵌套 `object`，兜底 `nullable`。
+ */
+export interface PluginSchemaBuilders {
+  /** 提取元素文本 */
+  text(selector: string, options?: QueryOptions): TextField
+  /** 提取 innerHTML */
+  html(selector: string, options?: QueryOptions): HtmlField
+  /** 提取属性 */
+  attr(name: string, selector?: string, options?: QueryOptions): AttrField
+  /** 把元素文本当 JSON 解析（如 `<script type="application/ld+json">`） */
+  json(selector: string): JsonField
+  /** 遍历列表：schema 传对象得到对象数组，传单个字段得到标量数组 */
+  loop<S extends Html2ObjectSchema | Field>(selector: string, schema: S): LoopField<S>
+  /** 在某个子树内解析，产出嵌套对象 */
+  object<S extends Html2ObjectSchema>(schema: S): ObjectField<S>
+  object<S extends Html2ObjectSchema>(selector: string, schema: S): ObjectField<S>
+  /** 让字段在未匹配时返回 null（而不是空字符串） */
+  nullable<F extends Field>(field: F): F & { nullable: true }
+}
+
 /** 插件运行上下文：平台能力注入。 */
 export interface PluginContext {
   /**
@@ -83,13 +143,27 @@ export interface PluginContext {
   mode: RequestMode
   /** 解析器：parseHtml / cleanText / normalizeUrl 等，避免插件自己引依赖 */
   parser: Parser
+  /** request-pack 的 `html2object`：按 schema 一次解析整页 HTML（用法见类型注释） */
+  html2object: Html2ObjectFn
+  /** `html2object` 的 schema 字段构造器：text / html / attr / json / loop / object / nullable */
+  schema: PluginSchemaBuilders
+  /**
+   * 本次运行的页面配置（只读快照，改了不影响采集流程）：
+   * `site` 站点、`category` 栏目（含 listUrl）、`rule` 生效规则
+   * （站点默认 < 栏目 < 任务覆盖 合并结果，插件可以读 `rule.config` 里的字段配置）、
+   * `requestOptions` 请求级配置（超时 / 请求头 / 编码等）。
+   */
+  site: SiteSnapshot
+  category: CategorySnapshot
+  rule: RuleSnapshot
+  requestOptions: CrawlRequestOptions
   /** 结构化日志；不要用 console，日志要能进任务日志 */
   logger: {
     info: (message: string) => void
     warn: (message: string) => void
     error: (message: string) => void
   }
-  /** 当前站点 / 栏目（详情阶段才有栏目） */
+  /** 当前站点 / 栏目 id（便捷访问，同 `ctx.site.id` / `ctx.category.id`） */
   siteId?: string
   categoryId?: string
 }

@@ -77,8 +77,9 @@ interface ListTestTarget {
  */
 async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promise<CategoryTestDto> {
   const { config } = target.rule
-  if (!config.list?.itemSelector) {
-    throw new ValidationError('规则缺少 list.itemSelector，无法测试列表页', [
+  // 全流程列表插件接管时不需要 itemSelector，由插件自行解析
+  if (!config.list?.itemSelector && !config.list?.plugin) {
+    throw new ValidationError('规则缺少 list.itemSelector（或列表插件），无法测试列表页', [
       { path: 'config.list.itemSelector', message: '必须提供列表项选择器', code: 'invalid_value' },
     ])
   }
@@ -159,7 +160,7 @@ async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promis
       links: preview,
       message:
         page.itemCount === 0
-          ? '列表项选择器没有命中任何节点，请检查 itemSelector'
+          ? '列表没有命中任何节点，请检查 itemSelector 或列表插件'
           : `命中 ${page.itemCount} 个列表项，提取 ${page.links.length} 条链接`,
     }
   } catch (error) {

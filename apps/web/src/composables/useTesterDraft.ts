@@ -37,7 +37,6 @@ export interface TesterDraft {
     paginationParameter: string
     /** path 模式模板，如 /page/{page} */
     paginationPathPattern: string
-    maxPages: number | null
   }
   /** 详情字段配置（与 Rule Schema 的 FieldRule 一致） */
   fields: TesterFieldDraft[]
@@ -93,7 +92,6 @@ export function createEmptyDraft(): TesterDraft {
       paginationType: 'none',
       paginationParameter: 'page',
       paginationPathPattern: '/page/{page}',
-      maxPages: null,
     },
     fields: [],
     detailPlugin: '',
@@ -157,7 +155,6 @@ export function loadTesterDraft(): TesterDraft | null {
         paginationType,
         paginationParameter: stringOf(list, 'paginationParameter', defaults.list.paginationParameter),
         paginationPathPattern: stringOf(list, 'paginationPathPattern', defaults.list.paginationPathPattern),
-        maxPages: typeof list.maxPages === 'number' ? list.maxPages : null,
         parserPlugins: namesOf(list.parserPlugins),
         excludeSelectors: namesOf(list.excludeSelectors),
         listFields: Array.isArray(list.listFields) ? (list.listFields as TesterFieldDraft[]) : [],

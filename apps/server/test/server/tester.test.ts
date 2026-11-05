@@ -191,7 +191,7 @@ describe('POST /api/tester/list', () => {
       body: JSON.stringify({
         url: `${fixture.origin}/paged?page=1`,
         list: { itemSelector: '.post', linkSelector: '.post-link' },
-        pagination: { type: 'query', parameter: 'page', maxPages: 3 },
+        pagination: { type: 'query', parameter: 'page' },
       }),
     })
     expect(okResponse.status).toBe(200)

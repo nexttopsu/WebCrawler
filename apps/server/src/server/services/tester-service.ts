@@ -60,11 +60,8 @@ export interface TesterRuntime {
 export const TESTER_TIMEOUT_MS = 30_000
 const TESTER_TIMEOUT_MAX_MS = 60_000
 
-/** 页面快照 HTML 上限：超过后给明确错误，避免把巨型页面塞进响应。 */
-const SNAPSHOT_MAX_BYTES = 3 * 1024 * 1024
-
-/** 快照正文截断上限（字符），预览不需要整个无限滚动页。 */
-const SNAPSHOT_MAX_CHARS = 2_000_000
+/** 页面快照请求体上限：超过后给明确错误（不静默截断，保证拿到的都是完整内容）。 */
+const SNAPSHOT_MAX_BYTES = 10 * 1024 * 1024
 
 /** 列表测试最多返回的链接数。 */
 const MAX_LIST_PREVIEW = 20
@@ -298,7 +295,7 @@ export async function fetchPageSnapshot(
       elapsedMs: page.elapsedMs,
       mode: page.mode,
       title,
-      html: sanitized.length > SNAPSHOT_MAX_CHARS ? `${sanitized.slice(0, SNAPSHOT_MAX_CHARS)}\n<!-- 预览已截断 -->` : sanitized,
+      html: sanitized,
       base: page.finalUrl,
       message: `HTTP ${page.status}，${page.mode} 模式，耗时 ${page.elapsedMs} ms`,
     }

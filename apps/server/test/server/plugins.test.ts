@@ -26,8 +26,9 @@ describe('插件管理', () => {
     const { status, body } = await call(app, '/api/plugins')
 
     expect(status).toBe(200)
-    expect(body.data.total).toBe(3)
+    expect(body.data.total).toBe(4)
     expect(body.data.items.map((item: { pluginId: string }) => item.pluginId)).toEqual([
+      'cntc-eyxw-news',
       'demo-fixture',
       'example-flow-news',
       'example-parser-clean',

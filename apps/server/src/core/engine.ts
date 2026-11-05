@@ -278,7 +278,10 @@ export class CrawlEngine {
       )
     }
 
-    const listUrl = listRule.url ?? context.category.listUrl ?? context.url
+    // 抓取地址优先用 context.url（任务执行器 / 测试器按分页逐页传入），
+    // 其次是规则里显式配置的 list.url，最后退回栏目列表地址。
+    // 不能让 category.listUrl 抢在 context.url 之前，否则 path/query 分页每一页都会重抓第 1 页。
+    const listUrl = context.url || listRule.url || context.category.listUrl
     const page = await this.fetchPage(context, listUrl)
     // 排除选择器优先级最高：字段提取前先删除命中的节点（混淆 / 广告等）
     const html = stripElements(page.html, listRule.excludeSelectors ?? [])

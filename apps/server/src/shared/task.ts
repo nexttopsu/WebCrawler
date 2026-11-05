@@ -19,6 +19,10 @@ export interface TaskOptions {
   limit?: number
   /** 覆盖规则中的分页页数上限 */
   maxPages?: number
+  /** 从第几页开始抓（从 1 起，含该页），默认 1 */
+  startPage?: number
+  /** 抓到第几页为止（含该页），缺省只抓 1 页 */
+  endPage?: number
   /** 单篇失败重试次数（不含首次），默认 1 */
   retries?: number
   /** 同一栏目的最小请求间隔（毫秒），默认 300 */

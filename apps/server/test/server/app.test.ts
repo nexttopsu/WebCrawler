@@ -63,13 +63,14 @@ describe('GET /api/system/info', () => {
       'plugin-system',
     ])
     // 插件内置，启动时全部注册
-    expect(body.data.plugins.registered).toBe(3)
+    expect(body.data.plugins.registered).toBe(4)
     expect(body.data.plugins.items.map((item: { id: string }) => item.id)).toEqual([
+      'cntc-eyxw-news',
       'demo-fixture',
       'example-flow-news',
       'example-parser-clean',
     ])
-    expect(body.data.plugins.items[0].source).toBe('src/plugins/demo-fixture.ts')
+    expect(body.data.plugins.items[0].source).toBe('src/plugins/cntc/eyxw-news.ts')
     expect(body.data.verbose).toBeUndefined()
   })
 

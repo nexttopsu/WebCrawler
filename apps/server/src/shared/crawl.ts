@@ -261,15 +261,13 @@ export interface ListRuleConfig {
 /** 分页方式。`query` / `path` 由任务执行器实现；`next` / `cursor` 仍为预留。 */
 export type PaginationType = 'none' | 'query' | 'path' | 'next' | 'cursor'
 
-/** 分页配置。 */
+/** 分页配置。页数范围由任务的「开始分页 / 结束分页」控制，规则只描述地址怎么生成。 */
 export interface PaginationConfig {
   type: PaginationType
   /** query 模式的页码参数名 */
   parameter?: string
   /** 起始页码，默认 1 */
   start?: number
-  /** 最大页数 */
-  maxPages?: number
   /** path 模式的路径模板，如 `/page/{page}` */
   pathPattern?: string
   /** next 模式的下一页链接选择器 */

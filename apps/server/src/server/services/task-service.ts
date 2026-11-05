@@ -45,6 +45,8 @@ export const taskOptionsSchema = z
   .object({
     limit: z.number().int().min(1).max(10_000).optional(),
     maxPages: z.number().int().min(1).max(500).optional(),
+    startPage: z.number().int().min(1).max(500).optional(),
+    endPage: z.number().int().min(1).max(500).optional(),
     retries: z.number().int().min(0).max(5).optional(),
     rateLimitMs: z.number().int().min(0).max(60_000).optional(),
     publishedAfter: isoTimeField.optional(),
@@ -56,6 +58,15 @@ export const taskOptionsSchema = z
     articleIds: z.array(idField).min(1).max(500).optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (value.startPage !== undefined && value.endPage !== undefined && value.endPage < value.startPage) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['endPage'],
+        message: '结束分页不能小于开始分页',
+      })
+    }
+  })
 
 export const taskCreateSchema = z
   .object({
@@ -289,11 +300,16 @@ function requireRuleConfig(config: CrawlRuleConfig | null, label: string, needLi
   if (!parsed.success) {
     throw new ValidationError(`${label}的规则配置不合法：${formatRuleIssues(parsed.issues)}`, parsed.issues)
   }
-  if (needList && !parsed.config.list?.itemSelector) {
-    throw new ValidationError(`${label}的规则缺少 list.itemSelector，无法抓取列表页`)
+  // 全流程插件接管列表/详情时，不需要选择器或字段映射
+  if (needList && !parsed.config.list?.itemSelector && !parsed.config.list?.plugin) {
+    throw new ValidationError(`${label}的规则缺少 list.itemSelector（或 list 插件），无法抓取列表页`)
   }
-  if (!needList && Object.keys(parsed.config.detail?.fields ?? parsed.config.fields ?? {}).length === 0) {
-    throw new ValidationError(`${label}的规则缺少详情字段（detail.fields），无法提取文章`)
+  if (
+    !needList &&
+    !parsed.config.detail?.plugin &&
+    Object.keys(parsed.config.detail?.fields ?? parsed.config.fields ?? {}).length === 0
+  ) {
+    throw new ValidationError(`${label}的规则缺少详情字段（detail.fields 或 detail 插件），无法提取文章`)
   }
   return parsed.config
 }

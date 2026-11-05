@@ -10,3 +10,4 @@ coverage/
 
 # 本地冒烟产物（截图、临时数据库）
 tmp/
+.workbuddy

@@ -19,6 +19,16 @@ import {
 } from '../../src/plugin-system/index.js'
 import { builtinPlugins } from '../../src/plugins/index.js'
 import { startSiteFixture, type SiteFixture } from '../server/helpers/site-fixture.js'
+import {
+  attr as rpAttr,
+  html2object as rpHtml2Object,
+  html as rpHtml,
+  json as rpJson,
+  loop as rpLoop,
+  nullable as rpNullable,
+  object as rpObject,
+  text as rpText,
+} from 'request-pack'
 
 let fixture: SiteFixture
 let ctx: PluginContext
@@ -36,6 +46,20 @@ beforeAll(async () => {
     proxy: null,
     mode: 'http',
     parser: createParser(),
+    html2object: rpHtml2Object,
+    schema: {
+      text: rpText,
+      html: rpHtml,
+      attr: rpAttr,
+      json: rpJson,
+      loop: rpLoop,
+      object: rpObject,
+      nullable: rpNullable,
+    },
+    site: { id: '1', name: 'Fixture', domain: '127.0.0.1', baseUrl: 'http://127.0.0.1' },
+    category: { id: '2', siteId: '1', name: '栏目', listUrl: 'http://127.0.0.1/list' },
+    rule: { version: 1, config: { version: 1 } },
+    requestOptions: {},
     logger: { info: () => {}, warn: () => {}, error: () => {} },
   }
 }, 30_000)
