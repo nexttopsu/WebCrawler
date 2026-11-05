@@ -342,6 +342,20 @@ export interface BrowserRuleConfig {
 }
 
 /**
+ * 采集范围。
+ *
+ * - `list`：只抓列表页并入库（标题 + 链接），文章详情状态记为 `pending`，留待补采；
+ * - `full`：列表 + 详情一次采完（默认）。
+ *
+ * 规则里的取值是**任务默认值**：新建任务时自动带出，任务里可以临时覆盖。
+ */
+export const CollectScope = {
+  LIST: 'list',
+  FULL: 'full',
+} as const
+export type CollectScope = (typeof CollectScope)[keyof typeof CollectScope]
+
+/**
  * 采集规则。
  *
  * 以 JSON 存储，第三阶段会在此基础上增加 Schema 校验、版本与继承；
@@ -351,6 +365,8 @@ export interface CrawlRuleConfig {
   version: number
   request?: RuleRequestConfig
   list?: ListRuleConfig
+  /** 默认采集范围；缺省视为 `full`（列表 + 详情） */
+  collectScope?: CollectScope
   /** 生效的分页配置（由 list.pagination 归一化而来） */
   pagination?: PaginationConfig
   detail?: DetailRuleConfig

@@ -46,8 +46,8 @@ export const ruleCreateSchema = z
 /** PUT 的输入：名称与配置必填；未提供的可选字段重置为空。 */
 export const ruleReplaceSchema = ruleCreateSchema.omit({ siteId: true }).extend({ config: z.unknown() })
 
-/** PATCH 的输入：任意子集。 */
-export const rulePatchSchema = ruleCreateSchema.omit({ siteId: true }).partial()
+/** PATCH 的输入：任意子集（含 siteId，用于把规则挪到另一个站点）。 */
+export const rulePatchSchema = ruleCreateSchema.partial()
 
 export const ruleListQuerySchema = z.object({
   ...paginationFields,
@@ -192,14 +192,28 @@ export function createRule(input: RuleCreateInput): RuleDto {
  */
 export function updateRule(id: number, input: RulePatchInput, replace = false): RuleDto {
   const current = findRuleOrThrow(id)
-  const siteId = current.siteId ?? 0
   const models = getModels()
+
+  // 换站点：目标站点必须存在；站点默认规则不能挪走（否则旧站点的默认规则悬空）。
+  const siteChanged = input.siteId !== undefined && input.siteId !== current.siteId
+  if (siteChanged) {
+    findSiteOrThrow(input.siteId as number)
+    if (isDefaultRuleOfSite(id)) {
+      throw new ConflictError('该规则是所在站点的默认规则，不能改到其它站点', { ruleId: id })
+    }
+  }
+  const siteId = siteChanged ? (input.siteId as number) : (current.siteId ?? 0)
 
   const name = input.name ?? current.name ?? ''
   if (input.name !== undefined) assertRuleNameAvailable(siteId, name, id)
 
+  // 换了站点而没显式指定栏目时，原栏目必然不属于新站点，直接解绑。
   const categoryId =
-    input.categoryId === undefined ? (replace ? null : current.categoryId) : (input.categoryId ?? null)
+    input.categoryId === undefined
+      ? replace || siteChanged
+        ? null
+        : current.categoryId
+      : (input.categoryId ?? null)
   if (categoryId !== null) assertCategoryForRule(categoryId, siteId)
   if (categoryId !== null && isDefaultRuleOfSite(id)) {
     throw new ConflictError('该规则是站点的默认规则，不能设置为栏目规则', { ruleId: id })
@@ -214,6 +228,7 @@ export function updateRule(id: number, input: RulePatchInput, replace = false): 
 
   models.crawlRule.db.transaction(() => {
     models.crawlRule.update(id, {
+      siteId,
       name,
       categoryId,
       config: JSON.stringify(nextConfig),

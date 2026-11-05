@@ -21,6 +21,7 @@ import {
 } from '../../request/index.js'
 import { describePlugin, type PluginContext, type PluginRegistry } from '../../plugin-system/index.js'
 import {
+  CollectScope,
   CrawlTaskStatus,
   CrawlTaskType,
   normalizeArticleUrl,
@@ -36,6 +37,7 @@ import type { Logger } from '../lib/logger.js'
 import {
   applyArticleDetail,
   listArticlesForDetailCollect,
+  listArticlesForDetailCollectByIds,
   markArticleDetailFailed,
   saveCrawledArticle,
   saveListArticle,
@@ -341,7 +343,12 @@ export class TaskExecutor {
           : snapshot.categories.map((category) => ({ category, urls: [] }))
 
       const taskType = normalizeTaskType(row.type)
-      if (taskType === CrawlTaskType.LIST) {
+      // 「仅列表」有两种来源：任务类型本身，或规则/任务选项把采集范围设成了 list。
+      // 后者让「单栏目 / 全站 / 增量」这类任务也能只抓列表，详情留待补采。
+      const listOnly =
+        taskType === CrawlTaskType.LIST ||
+        (taskType !== CrawlTaskType.DETAIL && snapshot.options.collectScope === CollectScope.LIST)
+      if (listOnly) {
         await this.runListStage({ taskId, snapshot, targets, engine, options, stats, checkpoint, seen, processed, completedCategories, signal, aborted, limiter, flush, errors, loggerOf: (category) => this.createCrawlLogger(taskId, snapshot.siteId, category.categoryId) })
       } else if (taskType === CrawlTaskType.DETAIL) {
         await this.runDetailStage({ taskId, snapshot, targets, engine, options, stats, checkpoint, processed, completedCategories, signal, aborted, limiter, flush, errors, loggerOf: (category) => this.createCrawlLogger(taskId, snapshot.siteId, category.categoryId) })
@@ -871,15 +878,25 @@ export class TaskExecutor {
       const categoryKey = `${snapshot.siteId}:${category.categoryId}`
       const logger = input.loggerOf(category)
 
+      // 指定了 articleIds 时只处理这些文章（文章页「补采选中」走这条路径），
+      // 否则按栏目整批拉取 pending / failed。
+      const targetIds = input.options.articleIds?.length ? [...input.options.articleIds] : null
+
       // 分批拉取待补采文章，直到没有新的待处理记录或任务被中断
       for (;;) {
         if (input.aborted()) break
-        const pending = listArticlesForDetailCollect({
-          siteId: snapshot.siteId,
-          categoryId: category.categoryId > 0 ? category.categoryId : null,
-          excludeUrls: processed,
-          limit: 100,
-        })
+        const pending = targetIds
+          ? listArticlesForDetailCollectByIds({
+              ids: targetIds,
+              siteId: snapshot.siteId,
+              categoryId: category.categoryId > 0 ? category.categoryId : null,
+            })
+          : listArticlesForDetailCollect({
+              siteId: snapshot.siteId,
+              categoryId: category.categoryId > 0 ? category.categoryId : null,
+              excludeUrls: processed,
+              limit: 100,
+            })
         if (pending.length === 0) break
 
         for (const article of pending) {
@@ -917,6 +934,8 @@ export class TaskExecutor {
           flush(false)
         }
         flush(true)
+        // 指定 id 的补采只需一轮：再查还是同一批，靠 processed 过滤会空转
+        if (targetIds) break
       }
 
       completedCategories.add(category.categoryId)

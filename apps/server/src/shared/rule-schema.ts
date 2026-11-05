@@ -407,6 +407,10 @@ export const crawlRuleConfigSchema = z
     }),
     request: ruleRequestSchema.optional(),
     list: listRuleSchema.optional(),
+    /** 默认采集范围：list 只抓列表，full 列表 + 详情；缺省视为 full */
+    collectScope: z.enum(['list', 'full'], {
+      message: '采集范围仅支持 list（仅列表）或 full（列表 + 详情）',
+    }).optional(),
     pagination: paginationSchema.optional(),
     detail: detailRuleSchema.optional(),
     fields: fieldsMapSchema.optional(),
@@ -465,6 +469,15 @@ export const crawlRuleConfigSchema = z
         code: 'custom',
         path: ['browser', 'enabled'],
         message: 'request.mode=http 与 browser.enabled=true 冲突',
+      })
+    }
+
+    // 仅列表采集必须先有列表规则，否则任务创建时无从下手
+    if (config.collectScope === 'list' && !config.list) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['collectScope'],
+        message: '采集范围设为「仅列表」时必须配置 list 规则',
       })
     }
   })

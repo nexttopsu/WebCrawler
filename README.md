@@ -256,6 +256,7 @@ pnpm --filter @webcrawler/core demo:crawl
 | GET / DELETE | `/api/articles/:id` | 文章详情（正文 / 图片 / JSON 扩展）/ 单篇删除 |
 | GET | `/api/articles/:id/raw` | 原始 HTML（入库时截断至 512 KB） |
 | POST | `/api/articles/batch-delete` | 批量删除（单次最多 100 条，返回 `deleted` 与 `missing`） |
+| POST | `/api/articles/collect-detail` | 详情补采：按 `ids` 或筛选条件提交，按「站点 + 栏目」拆成 `detail` 任务，返回 `articleCount` / `tasks` |
 | GET | `/api/logs` | 任务日志（`taskId`/`siteId`/`categoryId`/`level`/`stage`/`keyword`/`from`/`to`），写入时已脱敏 |
 | GET / POST | `/api/schedules` | 定时任务列表（`siteId`/`enabled`）/ 新建（`hourly`/`daily`/`weekly`/`cron` + 时区） |
 | GET / PUT / PATCH / DELETE | `/api/schedules/:id` | 详情、替换、局部更新（改小时会自动重算 cron 与 `nextRunAt`）、删除 |
@@ -373,6 +374,8 @@ pnpm --filter @webcrawler/core demo:crawl
 
 - 字段配置与第三阶段 Rule Schema 同构（`text` / `html` / `attr`、`multiple`、`required`、`defaultValue`、字段级清洗），保存后可直接被采集引擎执行。
 - 支持保存为新规则 / 更新已有规则、关联网站与栏目、导入导出 JSON。
+- **从规则列表带 `?ruleId=` 进来时会自动载入该规则**：选择器、字段、插件链、采集范围与列表页地址都会回填，保存面板锁定为「正在编辑这条规则」，改完直接保存即可（版本 +1），不用再手选更新目标。测试器界面没覆盖的配置（`request.method` / `headers` / `clean` 等）原样保留，不会因为保存一次就丢。
+- 采集范围（列表 + 详情 / 仅列表）在测试器顶部可切换，保存时写入 `config.collectScope`。
 - 草稿自动存 localStorage（上限 512 KB，超限明确提示且不静默丢弃），刷新恢复，离开页面前提示未保存修改；草稿只存 `proxyId` 引用，不含任何代理凭据。
 
 **验收 fixture**
@@ -470,6 +473,25 @@ running ──▶ cancelled
 
 `type=incremental` 额外按 `lastCrawlTime` / `publishedAfter` 过滤，只补新文章。
 
+### 采集范围与详情补采
+
+采集范围（`config.collectScope`）决定一条规则默认采多深：
+
+| 取值 | 行为 |
+| --- | --- |
+| `full`（缺省） | 列表页与详情页一次采完，文章 `detailStatus=collected` |
+| `list` | 只抓列表页并入库（标题 + 链接），`detailStatus=pending`，正文留待补采 |
+
+规则里的取值是**任务默认值**：新建任务时自动带出，任务对话框里可改成「列表 + 详情」或「仅列表」覆盖它。`urls` / `list` / `detail` 三类任务自带语义，不受规则默认值影响。
+
+补采走 `detail` 任务，只处理 `pending` / `failed` 的文章，同名字段有值才覆盖列表阶段的数据：
+
+- 单篇：文章行内「补采」；
+- 批量：勾选后「补采详情」；
+- 按筛选：当前筛选条件下所有待采文章，单次上限 200 篇。
+
+`POST /api/articles/collect-detail` 支持 `ids`（勾选）或 `siteId` / `categoryId` / `keyword`（筛选）两种入口，服务端按「站点 + 栏目」拆任务并立即入队，进度与日志在采集任务页查看。未关联栏目的文章（URLs 任务且未绑栏目）没有可用规则，会被计入 `skipped`。
+
 ### 文章与导出
 
 - 列表走 `runRawList`（参数绑定 + `ESCAPE '\'`），关键词命中标题 / 摘要 / 正文。
@@ -523,8 +545,8 @@ ORMlet 只接受 `TEXT` / `INTEGER` / `REAL` / `BLOB`，不支持 `NOT NULL`、`
 | `/` | 仪表盘 | 网站/栏目/文章总数、今日采集、执行中任务、近 30 天成功率、代理可用、14 天趋势图（ECharts）、最近任务、最近错误 |
 | `/sites` | 网站管理 | 列表 / 新增 / 编辑 / 删除 / 测试连接 / 启停 / 搜索筛选 / 跳转栏目管理（域名不手填，由站点地址自动获取） |
 | `/categories` | 栏目管理 | 列表 / 新增 / 编辑 / 删除 / 网站筛选 / 规则与代理绑定 / 启停 / 单栏目采集 / 批量采集 / 试采 |
-| `/rules` | 采集规则 | 列表 / 新建 / 编辑 / 复制 / 删除 / 导入 JSON / 导出 JSON / 版本时间线 / 跳转测试器 |
-| `/tester` | 规则测试器 | 三栏可拖动：页面加载、HTTP / Browser 切换、代理选择、DOM 快照、悬停高亮、点选生成 Selector、列表与详情测试、保存规则 |
+| `/rules` | 采集规则 | 列表 / 新建 / 编辑（只填网站、栏目、名称、描述、采集范围与规则 JSON）/ 复制 / 删除 / 导入 JSON / 导出 JSON / 版本时间线 / 「保存并测试」跳转测试器 |
+| `/tester` | 规则测试器 | 三栏可拖动：页面加载、HTTP / Browser 切换、代理选择、DOM 快照、悬停高亮、点选生成 Selector、列表与详情测试、采集范围切换、保存规则（带 ruleId 时回写同一条规则） |
 | `/tasks` | 采集任务 | 列表 / 新建（5 种类型）/ 暂停 / 恢复 / 取消 / 重试 / 删除 / 列表自动刷新 |
 | `/tasks/:id` | 任务详情 | 真实进度轮询（3s，终态自停）、四类计数、配置快照、执行断点、执行日志、控制按钮 |
 | `/articles` | 文章数据 | 关键词 / 网站 / 栏目 / 状态 / 时间筛选、批量选择、批量删除、JSON 与 CSV 导出 |

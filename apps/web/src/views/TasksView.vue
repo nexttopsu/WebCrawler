@@ -124,6 +124,8 @@ const form = reactive({
   publishedAfter: '',
   incremental: false,
   followPagination: true,
+  /** 采集范围：空串表示跟随规则默认值 */
+  collectScope: '' as '' | 'list' | 'full',
 })
 
 const formRules: FormRules = {
@@ -133,6 +135,10 @@ const formRules: FormRules = {
 
 const needCategories = computed(() => form.type === 'category' || form.type === 'batch')
 const needUrls = computed(() => form.type === 'urls')
+/** 采集范围只对「列表 + 详情」类任务有意义；list / detail / urls 自带语义。 */
+const scopeApplies = computed(() =>
+  ['site', 'category', 'batch', 'full', 'incremental'].includes(form.type),
+)
 /** 服务端要求所有类型都带 siteId：urls 类型靠站点默认规则解析正文。 */
 const needSite = computed(() => true)
 
@@ -176,6 +182,7 @@ function openCreate(): void {
     publishedAfter: '',
     incremental: false,
     followPagination: true,
+    collectScope: '',
   })
   dialogVisible.value = true
 }
@@ -210,6 +217,8 @@ async function submit(): Promise<void> {
   if (form.publishedAfter) options.publishedAfter = new Date(form.publishedAfter).toISOString()
   if (form.type === 'incremental') options.incremental = true
   else if (form.incremental) options.incremental = true
+  // 留空表示跟随规则里的 collectScope，不写进任务选项
+  if (scopeApplies.value && form.collectScope) options.collectScope = form.collectScope
 
   submitting.value = true
   try {
@@ -482,6 +491,21 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
               form.type === 'list'
                 ? '仅抓取列表页并入库（标题 + 链接），文章详情状态记为「待采集」，详情由「详情补采」任务单独抓取。'
                 : '只处理详情状态为「待采集」或「失败」的文章，逐篇抓取详情页；同名字段有值才覆盖列表阶段的数据。'
+            }}
+          </p>
+        </el-form-item>
+
+        <el-form-item v-if="scopeApplies" label="采集范围">
+          <el-radio-group v-model="form.collectScope">
+            <el-radio-button value="">跟随规则</el-radio-button>
+            <el-radio-button value="full">列表 + 详情</el-radio-button>
+            <el-radio-button value="list">仅列表</el-radio-button>
+          </el-radio-group>
+          <p class="form-hint">
+            {{
+              form.collectScope === 'list'
+                ? '只抓列表页并入库（标题 + 链接），文章详情状态记为「详情待采」，之后可在文章页单篇或批量补采。'
+                : '「跟随规则」使用规则里配置的采集范围；规则没设置时按「列表 + 详情」执行。'
             }}
           </p>
         </el-form-item>

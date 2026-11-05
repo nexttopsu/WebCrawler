@@ -11,6 +11,10 @@ import {
   getArticleRaw,
   listArticles,
 } from '../services/article-service.js'
+import {
+  articleCollectDetailSchema,
+  collectArticleDetails,
+} from '../services/article-collect-service.js'
 import type { ServiceDeps } from './deps.js'
 import type { ApiRoute } from './types.js'
 
@@ -27,7 +31,7 @@ const batchDeleteSchema = z.object({ ids: z.array(z.number().int().positive()).m
  * 导出注册在 `/:id` 之前：否则 `/api/articles/export` 会被当成 id=export。
  * 导出返回流式 Response，内存中只保留一批数据，并硬性限制单次条数。
  */
-export function articleRoutes(_deps: ServiceDeps): ApiRoute[] {
+export function articleRoutes(deps: ServiceDeps): ApiRoute[] {
   return [
     {
       method: 'GET',
@@ -57,6 +61,20 @@ export function articleRoutes(_deps: ServiceDeps): ApiRoute[] {
       handler: async (event) => {
         const input = await parseBody(event, batchDeleteSchema)
         return jsonOk(event, deleteArticles(input.ids))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/articles/collect-detail',
+      handler: async (event) => {
+        const input = await parseBody(event, articleCollectDetailSchema)
+        // 走运行时创建，任务才会立即入队；直接调服务层只会写库
+        return jsonOk(
+          event,
+          collectArticleDetails(input, (taskInput) =>
+            deps.runtime.createTask(taskInput, { trigger: 'manual' }),
+          ),
+        )
       },
     },
     {

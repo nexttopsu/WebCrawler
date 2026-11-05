@@ -1,4 +1,5 @@
 import type {
+  ArticleCollectDetailResultDto,
   ArticleDeleteResultDto,
   ArticleDto,
   ArticleRawDto,
@@ -42,6 +43,28 @@ export function deleteArticle(id: number): Promise<ArticleDeleteResultDto> {
 
 export function deleteArticles(ids: number[]): Promise<ArticleDeleteResultDto> {
   return api.post<ArticleDeleteResultDto>('/articles/batch-delete', { ids })
+}
+
+export interface CollectDetailParams {
+  /** 勾选的文章 id；与筛选条件二选一，同时给出时以 id 为准 */
+  ids?: number[]
+  siteId?: number
+  categoryId?: number
+  keyword?: string
+  /** 单次最多补采多少篇，默认 200 */
+  limit?: number
+}
+
+/**
+ * 补采详情。
+ *
+ * 服务端会按「站点 + 栏目」拆成若干 detail 任务并立即入队，
+ * 返回创建的 taskId；进度到采集任务页查看。
+ */
+export function collectArticleDetail(
+  params: CollectDetailParams,
+): Promise<ArticleCollectDetailResultDto> {
+  return api.post<ArticleCollectDetailResultDto>('/articles/collect-detail', params)
 }
 
 /**

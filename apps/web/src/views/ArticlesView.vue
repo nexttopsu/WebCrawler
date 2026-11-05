@@ -8,9 +8,16 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Download, Eye, FileJson, FileSpreadsheet, RefreshCw, Trash2 } from '@lucide/vue'
+import { CloudDownload, Download, Eye, FileJson, FileSpreadsheet, RefreshCw, Trash2 } from '@lucide/vue'
 import type { ArticleSummaryDto, CategoryDto, SiteDto } from '@webcrawler/shared'
-import { deleteArticle, deleteArticles, exportArticles, listArticles } from '@/api/articles'
+import {
+  collectArticleDetail,
+  deleteArticle,
+  deleteArticles,
+  exportArticles,
+  listArticles,
+  type CollectDetailParams,
+} from '@/api/articles'
 import { listSites } from '@/api/sites'
 import { listCategories } from '@/api/categories'
 import { errorMessage } from '@/api/client'
@@ -130,6 +137,65 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
+/* -------------------------------- 详情补采 -------------------------------- */
+
+const collecting = ref(false)
+const collectingId = ref<number | null>(null)
+
+/** 选中里还需要补采的：已采集过的不重复提交 */
+const collectableSelected = computed(() =>
+  selected.value.filter((row) => row.detailStatus !== 'collected'),
+)
+
+async function submitCollect(payload: CollectDetailParams, singleId?: number): Promise<void> {
+  if (singleId) collectingId.value = singleId
+  else collecting.value = true
+  try {
+    const result = await collectArticleDetail(payload)
+    if (result.articleCount === 0) {
+      ElMessage.warning(result.errors[0] ?? '没有需要补采的文章（详情都已采集）')
+      return
+    }
+    ElMessage.success(
+      `已提交 ${result.articleCount} 篇文章的详情补采（${result.tasks.length} 个任务），进度见「采集任务」`,
+    )
+    if (result.errors.length > 0) ElMessage.warning(result.errors[0]!)
+    await list.load()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    collecting.value = false
+    collectingId.value = null
+  }
+}
+
+function collectOne(row: ArticleSummaryDto): void {
+  void submitCollect({ ids: [row.id] }, row.id)
+}
+
+function collectSelected(): void {
+  const ids = collectableSelected.value.map((row) => row.id)
+  if (ids.length === 0) {
+    ElMessage.warning('选中的文章详情都已采集，无需补采')
+    return
+  }
+  void submitCollect({ ids })
+}
+
+/** 按当前筛选条件批量补采（忽略勾选），服务端单次最多 500 篇。 */
+function collectByFilter(): void {
+  if (list.filters.detailStatus === 'collected') {
+    ElMessage.warning('当前筛选是「详情已采集」，没有可补采的文章')
+    return
+  }
+  void submitCollect({
+    siteId: list.filters.siteId || undefined,
+    categoryId: list.filters.categoryId || undefined,
+    keyword: list.filters.keyword || undefined,
+    limit: 200,
+  })
+}
+
 /* ---------------------------------- 导出 ---------------------------------- */
 
 const exporting = ref<'json' | 'csv' | null>(null)
@@ -142,6 +208,11 @@ async function exportAs(format: 'json' | 'csv'): Promise<void> {
         keyword: list.filters.keyword || undefined,
         siteId: list.filters.siteId || undefined,
         categoryId: list.filters.categoryId || undefined,
+        detailStatus: (list.filters.detailStatus || undefined) as
+          | 'pending'
+          | 'collected'
+          | 'failed'
+          | undefined,
         createdFrom: list.filters.range?.[0],
         createdTo: list.filters.range?.[1],
         sort: 'createdAt',
@@ -182,6 +253,19 @@ void loadCategoryOptions()
   <div class="view">
     <PageHeader title="文章数据" description="采集结果按站点、栏目与时间筛选，支持导出 JSON 与 CSV。">
       <template #actions>
+        <el-button
+          :disabled="collectableSelected.length === 0"
+          :loading="collecting"
+          @click="collectSelected"
+        >
+          <CloudDownload :size="14" />
+          <span>补采详情{{ collectableSelected.length ? `（${collectableSelected.length}）` : '' }}</span>
+        </el-button>
+        <el-tooltip content="按当前筛选条件，为所有「详情待采 / 详情失败」的文章批量补采（最多 200 篇）" placement="bottom">
+          <el-button :loading="collecting" @click="collectByFilter">
+            <span>筛选补采</span>
+          </el-button>
+        </el-tooltip>
         <el-button :disabled="selected.length === 0" @click="askBatchDelete">
           <Trash2 :size="14" />
           <span>批量删除{{ selected.length ? `（${selected.length}）` : '' }}</span>
@@ -323,12 +407,22 @@ void loadCategoryOptions()
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="172" fixed="right">
+      <el-table-column label="操作" width="232" fixed="right">
         <template #default="{ row }">
           <div class="row-actions">
             <el-button size="small" text @click="router.push(`/articles/${row.id}`)">
               <Eye :size="13" />
               详情
+            </el-button>
+            <el-button
+              v-if="row.detailStatus !== 'collected'"
+              size="small"
+              text
+              :loading="collectingId === row.id"
+              @click="collectOne(row)"
+            >
+              <CloudDownload :size="13" />
+              补采
             </el-button>
             <a class="wb-link" :href="row.url" target="_blank" rel="noopener noreferrer">原文</a>
             <el-button size="small" text type="danger" @click="askDelete(row)">

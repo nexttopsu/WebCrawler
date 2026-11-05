@@ -7,6 +7,7 @@ import {
 } from '../../database/index.js'
 import {
   canTransition,
+  CollectScope,
   CrawlTaskStatus,
   CrawlTaskTrigger,
   CrawlTaskType,
@@ -51,6 +52,8 @@ export const taskOptionsSchema = z
     incremental: z.boolean().optional(),
     maxDurationMs: z.number().int().min(1_000).max(86_400_000).optional(),
     followPagination: z.boolean().optional(),
+    collectScope: z.enum(['list', 'full']).optional(),
+    articleIds: z.array(idField).min(1).max(500).optional(),
   })
   .strict()
 
@@ -91,6 +94,20 @@ export const taskCreateSchema = z
     }
     if (value.type !== 'urls' && value.urls?.length) {
       ctx.addIssue({ code: 'custom', path: ['urls'], message: '仅 urls 类型可以指定 urls' })
+    }
+    if (value.options?.articleIds && value.type !== 'detail') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['options', 'articleIds'],
+        message: '只有详情补采（detail）任务可以指定 articleIds',
+      })
+    }
+    if (value.type === 'detail' && value.options?.collectScope) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['options', 'collectScope'],
+        message: '详情补采任务不涉及列表，不能指定 collectScope',
+      })
     }
   })
 
@@ -390,6 +407,19 @@ export function buildTaskSnapshot(
     config: categories[0]!.config,
   }
 
+  // 采集范围优先级：任务显式指定 > 规则默认 > full。
+  // list / detail 自带语义；urls 的地址本身就是待抓页面，都不套用规则默认值。
+  const scopeApplies =
+    input.type !== CrawlTaskType.LIST &&
+    input.type !== CrawlTaskType.DETAIL &&
+    input.type !== CrawlTaskType.URLS
+  const collectScope: CollectScope | undefined =
+    input.type === CrawlTaskType.LIST
+      ? CollectScope.LIST
+      : scopeApplies
+        ? (options.collectScope ?? primaryRule.config.collectScope ?? CollectScope.FULL)
+        : undefined
+
   return {
     site,
     categoryRows,
@@ -400,7 +430,7 @@ export function buildTaskSnapshot(
       baseUrl: site.baseUrl ?? '',
       categories,
       urls: input.urls ?? [],
-      options,
+      options: collectScope ? { ...options, collectScope } : options,
     },
   }
 }

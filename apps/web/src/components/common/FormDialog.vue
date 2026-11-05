@@ -57,10 +57,17 @@ function close(): void {
     <slot />
 
     <template #footer>
-      <el-button :disabled="loading" @click="close">{{ readonly ? '关闭' : cancelText }}</el-button>
-      <el-button v-if="!readonly" type="primary" :loading="loading" @click="emit('submit')">
-        {{ submitText }}
-      </el-button>
+      <div class="form-dialog__footer">
+        <div class="form-dialog__footer-extra">
+          <slot name="footer-extra" />
+        </div>
+        <div class="form-dialog__footer-actions">
+          <el-button :disabled="loading" @click="close">{{ readonly ? '关闭' : cancelText }}</el-button>
+          <el-button v-if="!readonly" type="primary" :loading="loading" @click="emit('submit')">
+            {{ submitText }}
+          </el-button>
+        </div>
+      </div>
     </template>
   </el-dialog>
 </template>
@@ -71,5 +78,19 @@ function close(): void {
   font-size: 12.5px;
   color: var(--wb-text-muted);
   line-height: 1.7;
+}
+
+.form-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.form-dialog__footer-extra,
+.form-dialog__footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

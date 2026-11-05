@@ -114,6 +114,26 @@ describe('规则 Schema', () => {
     expect(text).toContain('代理协议')
   })
 
+  it('采集范围只接受 list / full', () => {
+    const text = errorText({ version: 1, collectScope: 'detail-only' })
+    expect(text).toContain('采集范围')
+  })
+
+  it('采集范围为仅列表时必须配置 list', () => {
+    const text = errorText({ version: 1, collectScope: 'list' })
+    expect(text).toContain('必须配置 list 规则')
+  })
+
+  it('采集范围为仅列表且配置了 list 时通过校验', () => {
+    const result = parseRuleConfig({
+      version: 1,
+      collectScope: 'list',
+      list: { itemSelector: '.news-item', pagination: { type: 'none' } },
+    })
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.config.collectScope).toBe('list')
+  })
+
   it('request.mode 与 browser.enabled 不能冲突', () => {
     const text = errorText({ version: 1, request: { mode: 'http' }, browser: { enabled: true } })
     expect(text).toContain('冲突')

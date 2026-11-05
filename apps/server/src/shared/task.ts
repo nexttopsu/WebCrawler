@@ -1,4 +1,4 @@
-import type { CrawlRuleConfig } from './crawl.js'
+import type { CollectScope, CrawlRuleConfig } from './crawl.js'
 import type {
   CrawlTaskStatus,
   CrawlTaskTrigger,
@@ -33,6 +33,19 @@ export interface TaskOptions {
   maxDurationMs?: number
   /** 是否按规则翻页，默认 true */
   followPagination?: boolean
+  /**
+   * 采集范围：`list` 只抓列表、`full` 列表 + 详情。
+   *
+   * 创建任务时若未指定，则跟随规则里的 `collectScope`；规则也没有时按 `full`。
+   */
+  collectScope?: CollectScope
+  /**
+   * 详情补采任务的目标文章 id。
+   *
+   * 有值时只处理这些文章（仍受任务所属站点与栏目约束），
+   * 用于文章页「补采选中」「补采全部待采」按需触发。
+   */
+  articleIds?: number[]
 }
 
 /** 单个栏目的规则快照。 */

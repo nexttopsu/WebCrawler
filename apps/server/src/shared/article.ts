@@ -53,3 +53,24 @@ export interface ArticleDeleteResultDto {
   /** 请求中不存在或已被删除的 id */
   missing: number[]
 }
+
+/**
+ * 详情补采结果。
+ *
+ * 补采按「站点 + 栏目」拆成若干 `detail` 任务，返回创建的 taskId，
+ * 前端据此提示并跳转任务详情。
+ */
+export interface ArticleCollectDetailResultDto {
+  /** 本次实际提交补采的文章数 */
+  articleCount: number
+  tasks: Array<{
+    taskId: number
+    siteId: number
+    categoryId: number
+    articleCount: number
+  }>
+  /** 被跳过的文章数（已采集、未关联栏目或规则不可用） */
+  skipped: number
+  /** 部分栏目建任务失败的原因，成功时为空数组 */
+  errors: string[]
+}

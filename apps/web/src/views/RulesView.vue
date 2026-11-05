@@ -14,8 +14,7 @@ import {
   RefreshCw,
   Upload,
 } from '@lucide/vue'
-import type { CategoryDto, CrawlRuleStatus, PluginDto, RuleDto, RuleVersionDto, SiteDto } from '@webcrawler/shared'
-import { useCommaText } from '@/composables/useCommaText'
+import type { CategoryDto, CrawlRuleStatus, RuleDto, RuleVersionDto, SiteDto } from '@webcrawler/shared'
 import {
   createRule,
   deleteRule,
@@ -27,7 +26,6 @@ import {
   setRuleStatus,
   validateRuleConfig,
 } from '@/api/rules'
-import { listPlugins } from '@/api/plugins'
 import { listSites } from '@/api/sites'
 import { listCategories } from '@/api/categories'
 import { ApiClientError, errorMessage } from '@/api/client'
@@ -95,58 +93,17 @@ const form = reactive({
   categoryId: null as number | null,
   name: '',
   description: '',
-  /** 详情阶段解析器插件链（写入 config.parserPlugins） */
-  parserPlugins: [] as string[],
-  /** 列表阶段解析器插件链（写入 config.list.parserPlugins） */
-  listParserPlugins: [] as string[],
-  /** 详情阶段排除选择器（写入 config.excludeSelectors） */
-  excludeSelectors: [] as string[],
-  /** 列表阶段排除选择器（写入 config.list.excludeSelectors） */
-  listExcludeSelectors: [] as string[],
+  /** 采集范围（写入 config.collectScope）：full = 列表 + 详情，list = 仅列表 */
+  collectScope: 'full' as 'full' | 'list',
 })
 
-/** 解析器插件选项（type=parser 且已启用） */
-const parserPluginOptions = ref<PluginDto[]>([])
-
 /**
- * 排除选择器：数组 ↔ 逗号分隔单行输入，单向同步（打字时只往数组解析，
- * 不回写文本），否则敲 `,` 会被立即规范化掉导致输入不了逗号。
+ * 采集范围写入规则 JSON：选 full 时直接删掉该键 —— 缺省即「列表 + 详情」，
+ * 这样老规则不会因为多出一个默认字段而每次保存都产生版本差异。
  */
-const listExcludeText = useCommaText(
-  () => form.listExcludeSelectors,
-  (value) => {
-    form.listExcludeSelectors = value
-  },
-)
-
-const detailExcludeText = useCommaText(
-  () => form.excludeSelectors,
-  (value) => {
-    form.excludeSelectors = value
-  },
-)
-
-async function loadParserPlugins(): Promise<void> {
-  try {
-    const page = await listPlugins({ type: 'parser', enabled: 'true', pageSize: 100 })
-    parserPluginOptions.value = page.items
-  } catch {
-    parserPluginOptions.value = []
-  }
-}
-
-/**
- * 把表单里的插件与排除选择器写进规则 JSON：
- * 列表项进 config.list.*，详情项进 config 顶层；仅在非空时写入对应键。
- */
-function mergeParserPlugins(config: Record<string, unknown>): Record<string, unknown> {
-  const listConfig = config.list as Record<string, unknown> | undefined
-  const listPatch: Record<string, unknown> = {}
-  if (form.listExcludeSelectors.length > 0) listPatch.excludeSelectors = [...form.listExcludeSelectors]
-  if (form.listParserPlugins.length > 0) listPatch.parserPlugins = [...form.listParserPlugins]
-  if (Object.keys(listPatch).length > 0) config.list = { ...(listConfig ?? {}), ...listPatch }
-  if (form.excludeSelectors.length > 0) config.excludeSelectors = [...form.excludeSelectors]
-  if (form.parserPlugins.length > 0) config.parserPlugins = [...form.parserPlugins]
+function applyCollectScope(config: Record<string, unknown>): Record<string, unknown> {
+  if (form.collectScope === 'list') config.collectScope = 'list'
+  else delete config.collectScope
   return config
 }
 
@@ -207,15 +164,11 @@ function openCreate(): void {
     categoryId: null,
     name: '',
     description: '',
-    parserPlugins: [],
-    listParserPlugins: [],
-    excludeSelectors: [],
-    listExcludeSelectors: [],
+    collectScope: 'full' as 'full' | 'list',
   })
   configText.value = JSON.stringify(DEFAULT_CONFIG, null, 2)
   validationErrors.value = []
   if (form.siteId) void loadCategories(form.siteId)
-  void loadParserPlugins()
   dialogVisible.value = true
 }
 
@@ -226,41 +179,34 @@ async function openEdit(row: RuleDto): Promise<void> {
     categoryId: row.categoryId,
     name: row.name,
     description: row.description ?? '',
-    parserPlugins: [],
-    listParserPlugins: [],
-    excludeSelectors: [],
-    listExcludeSelectors: [],
+    collectScope: 'full' as 'full' | 'list',
   })
+  configText.value = ''
+  validationErrors.value = []
   dialogVisible.value = true
   void loadCategories(row.siteId)
-  void loadParserPlugins()
   try {
     const detail = await getRule(row.id)
     configText.value = JSON.stringify(detail.config, null, 2)
-    form.parserPlugins = Array.isArray(detail.config?.parserPlugins)
-      ? detail.config.parserPlugins.filter((name): name is string => typeof name === 'string')
-      : []
-    form.listParserPlugins = Array.isArray(detail.config?.list?.parserPlugins)
-      ? detail.config.list.parserPlugins.filter((name): name is string => typeof name === 'string')
-      : []
-    form.excludeSelectors = Array.isArray(detail.config?.excludeSelectors)
-      ? detail.config.excludeSelectors.filter((name): name is string => typeof name === 'string')
-      : []
-    form.listExcludeSelectors = Array.isArray(detail.config?.list?.excludeSelectors)
-      ? detail.config.list.excludeSelectors.filter((name): name is string => typeof name === 'string')
-      : []
+    form.collectScope = detail.config?.collectScope === 'list' ? 'list' : 'full'
   } catch (error) {
     ElMessage.error(errorMessage(error))
   }
 }
 
-async function submit(): Promise<void> {
+/**
+ * 保存规则。
+ *
+ * `goTest` 为真时保存后直接跳到规则测试器（带上 ruleId），
+ * 由测试器载入这条规则继续完善，保存后回到同一个规则（版本 +1）。
+ */
+async function submit(goTest = false): Promise<void> {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid || !form.siteId) return
 
   let config: Record<string, unknown>
   try {
-    config = mergeParserPlugins(JSON.parse(configText.value) as Record<string, unknown>)
+    config = applyCollectScope(JSON.parse(configText.value) as Record<string, unknown>)
   } catch (error) {
     ElMessage.error(`规则不是合法 JSON：${(error as Error).message}`)
     return
@@ -268,21 +214,27 @@ async function submit(): Promise<void> {
 
   submitting.value = true
   try {
-    if (editingId.value) {
-      await patchRule(editingId.value, { name: form.name.trim(), config, description: form.description.trim() || null })
-      ElMessage.success('规则已更新（版本号会 +1）')
-    } else {
-      await createRule({
-        siteId: form.siteId,
-        categoryId: form.categoryId,
-        name: form.name.trim(),
-        config,
-        description: form.description.trim() || null,
-      })
-      ElMessage.success('规则已创建')
-    }
+    const isUpdate = editingId.value !== null
+    const saved = isUpdate
+      ? await patchRule(editingId.value!, {
+          siteId: form.siteId,
+          categoryId: form.categoryId,
+          name: form.name.trim(),
+          config,
+          description: form.description.trim() || null,
+        })
+      : await createRule({
+          siteId: form.siteId,
+          categoryId: form.categoryId,
+          name: form.name.trim(),
+          config,
+          description: form.description.trim() || null,
+        })
+    editingId.value = saved.id
+    ElMessage.success(isUpdate ? `规则已保存（v${saved.version}）` : '规则已创建')
     dialogVisible.value = false
     await list.load()
+    if (goTest) router.push({ path: '/tester', query: { ruleId: String(saved.id) } })
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
@@ -342,21 +294,9 @@ async function onFileChange(event: Event): Promise<void> {
       return
     }
     openCreate()
-    configText.value = JSON.stringify(json, null, 2)
     const imported = json as Record<string, unknown>
-    form.parserPlugins = Array.isArray(imported.parserPlugins)
-      ? (imported.parserPlugins as unknown[]).filter((name): name is string => typeof name === 'string')
-      : []
-    const importedList = imported.list as Record<string, unknown> | undefined
-    form.listParserPlugins = Array.isArray(importedList?.parserPlugins)
-      ? (importedList!.parserPlugins as unknown[]).filter((name): name is string => typeof name === 'string')
-      : []
-    form.excludeSelectors = Array.isArray(imported.excludeSelectors)
-      ? (imported.excludeSelectors as unknown[]).filter((name): name is string => typeof name === 'string')
-      : []
-    form.listExcludeSelectors = Array.isArray(importedList?.excludeSelectors)
-      ? (importedList!.excludeSelectors as unknown[]).filter((name): name is string => typeof name === 'string')
-      : []
+    configText.value = JSON.stringify(imported, null, 2)
+    form.collectScope = imported.collectScope === 'list' ? 'list' : 'full'
     ElMessage.success('已导入到编辑器，确认网站与名称后保存')
   } catch (error) {
     ElMessage.error(`文件不是合法 JSON：${errorMessage(error)}`)
@@ -536,6 +476,7 @@ void loadSites()
               <template v-else>旧版选择器写法</template>
               <template v-if="parserPluginCount(row)"> · 解析器插件 {{ parserPluginCount(row) }}</template>
               <template v-if="row.config?.detail?.plugin"> · 详情插件</template>
+              <template v-if="row.config?.collectScope === 'list'"> · 仅列表</template>
             </span>
           </div>
         </template>
@@ -606,8 +547,8 @@ void loadSites()
       :loading="submitting"
       :width="760"
       submit-text="保存规则"
-      description="配置必须通过 Rule Schema 校验才能保存；保存后版本号自动 +1。"
-      @submit="submit"
+      description="先填元信息与规则 JSON；点「保存并测试」会跳到规则测试器，在那里边测边改，保存后仍是同一条规则。"
+      @submit="submit()"
     >
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="90px" class="rule-form">
         <div class="form-grid">
@@ -628,59 +569,18 @@ void loadSites()
         <el-form-item label="描述">
           <el-input v-model="form.description" maxlength="200" placeholder="可选" />
         </el-form-item>
-        <el-form-item label="列表插件">
-          <el-select
-            v-model="form.listParserPlugins"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            placeholder="不使用（列表字段提取后直接使用）"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="plugin in parserPluginOptions"
-              :key="plugin.name"
-              :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-              :value="plugin.name"
-            />
-          </el-select>
-          <p class="plugin-hint">列表字段提取后按顺序重格式化（如图片解密）；写入 list.parserPlugins，与详情互不影响。</p>
-        </el-form-item>
-        <el-form-item label="详情插件">
-          <el-select
-            v-model="form.parserPlugins"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            placeholder="不使用（详情字段提取后直接清洗入库）"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="plugin in parserPluginOptions"
-              :key="plugin.name"
-              :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-              :value="plugin.name"
-            />
-          </el-select>
-          <p class="plugin-hint">详情字段提取后按顺序重格式化（如图片解密）；写入 parserPlugins，与列表互不影响。</p>
-        </el-form-item>
-        <el-form-item label="列表排除">
-          <el-input
-            v-model="listExcludeText"
-            clearable
-            placeholder="如 .ad, .time（逗号分隔，可不填）"
-          />
-          <p class="plugin-hint">优先级最高：列表字段提取前先删除命中的节点（混淆 / 广告）；写入 list.excludeSelectors，可不填。</p>
-        </el-form-item>
-        <el-form-item label="详情排除">
-          <el-input
-            v-model="detailExcludeText"
-            clearable
-            placeholder="如 .ad, .author-info（逗号分隔，可不填）"
-          />
-          <p class="plugin-hint">优先级最高：详情字段提取前先删除命中的节点（混淆 / 广告）；写入 excludeSelectors，可不填。</p>
+        <el-form-item label="采集范围">
+          <el-radio-group v-model="form.collectScope">
+            <el-radio-button value="full">列表 + 详情</el-radio-button>
+            <el-radio-button value="list">仅列表</el-radio-button>
+          </el-radio-group>
+          <p class="plugin-hint">
+            {{
+              form.collectScope === 'list'
+                ? '只抓列表页并入库（标题 + 链接），文章详情状态记为「详情待采」，之后可在文章页单篇或批量补采。'
+                : '列表页与详情页一次采完。选「仅列表」会写入 collectScope=list，作为新建任务的默认值，任务里可以再改。'
+            }}
+          </p>
         </el-form-item>
         <el-form-item label="规则 JSON">
           <div class="json-editor">
@@ -709,6 +609,13 @@ void loadSites()
           </div>
         </el-form-item>
       </el-form>
+
+      <template #footer-extra>
+        <el-button :disabled="submitting" @click="submit(true)">
+          <FlaskConical :size="14" />
+          <span>保存并测试</span>
+        </el-button>
+      </template>
     </FormDialog>
 
     <ConfirmDialog

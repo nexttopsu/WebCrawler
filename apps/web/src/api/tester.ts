@@ -57,7 +57,16 @@ export function createRule(input: { siteId: number; categoryId?: number; name: s
 }
 
 /** 更新已有规则（配置变化时服务端自动 version+1）。 */
-export function updateRule(id: number, input: { name?: string; config?: unknown; description?: string }): Promise<RuleDto> {
+export function updateRule(
+  id: number,
+  input: {
+    name?: string
+    config?: unknown
+    description?: string
+    siteId?: number
+    categoryId?: number | null
+  },
+): Promise<RuleDto> {
   return apiRequest<RuleDto>(`/rules/${id}`, { method: 'PATCH', body: JSON.stringify(input) })
 }
 

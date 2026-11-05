@@ -368,6 +368,98 @@ export function listArticlesForDetailCollect(options: {
 }
 
 /* -------------------------------------------------------------------------- */
+/* 详情补采                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/** 待补采文章的最小信息：补采只需要 id、归属与地址。 */
+export interface ArticleCollectTarget {
+  id: number
+  siteId: number
+  categoryId: number | null
+  title: string
+  url: string
+}
+
+/**
+ * 查询待补采的文章。
+ *
+ * 只有 `pending` / `failed` 需要补采，`collected` 一律排除。
+ * 指定 `ids` 时按 id 过滤（文章页勾选补采），否则按站点 / 栏目 / 关键字筛选。
+ */
+export function listArticlesForCollect(options: {
+  ids?: number[]
+  siteId?: number
+  categoryId?: number
+  keyword?: string
+  /** 单次上限，默认 200，最大 500 */
+  limit?: number
+}): ArticleCollectTarget[] {
+  const db = getDatabaseContext().db
+  const conditions = ["t.detailStatus IN ('pending', 'failed')", 't.url IS NOT NULL']
+  const params: Array<string | number> = []
+
+  if (options.ids?.length) {
+    conditions.push(`t.id IN (${options.ids.map(() => '?').join(', ')})`)
+    params.push(...options.ids)
+  }
+  if (options.siteId) {
+    conditions.push('t.siteId = ?')
+    params.push(options.siteId)
+  }
+  if (options.categoryId) {
+    conditions.push('t.categoryId = ?')
+    params.push(options.categoryId)
+  }
+  if (options.keyword) {
+    const pattern = likePattern(options.keyword)
+    conditions.push("(t.title LIKE ? ESCAPE '\\' OR t.summary LIKE ? ESCAPE '\\')")
+    params.push(pattern, pattern)
+  }
+
+  const limit = Math.min(Math.max(1, options.limit ?? 200), 500)
+  const rows = db
+    .prepare(
+      `SELECT t.id, t.siteId, t.categoryId, t.title, t.url
+       FROM article t WHERE ${conditions.join(' AND ')} ORDER BY t.id ASC LIMIT ?`,
+    )
+    .all(...params, limit) as Array<{
+    id: number
+    siteId: number
+    categoryId: number | null
+    title: string | null
+    url: string | null
+  }>
+
+  const result: ArticleCollectTarget[] = []
+  for (const row of rows) {
+    if (!row.url) continue
+    result.push({
+      id: row.id,
+      siteId: row.siteId,
+      categoryId: row.categoryId,
+      title: row.title ?? '',
+      url: row.url,
+    })
+  }
+  return result
+}
+
+/** 按 id 查询待补采文章（详情补采任务使用），仍受站点 / 栏目约束。 */
+export function listArticlesForDetailCollectByIds(options: {
+  ids: number[]
+  siteId: number
+  categoryId?: number | null
+}): Array<{ id: number; title: string; url: string }> {
+  if (options.ids.length === 0) return []
+  return listArticlesForCollect({
+    ids: options.ids,
+    siteId: options.siteId,
+    ...(options.categoryId ? { categoryId: options.categoryId } : {}),
+    limit: 500,
+  }).map(({ id, title, url }) => ({ id, title, url }))
+}
+
+/* -------------------------------------------------------------------------- */
 /* 查询                                                                        */
 /* -------------------------------------------------------------------------- */
 

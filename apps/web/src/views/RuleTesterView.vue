@@ -1,22 +1,26 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { onBeforeRouteLeave } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Globe, MonitorPlay } from '@lucide/vue'
+import { ArrowLeft, Globe, MonitorPlay } from '@lucide/vue'
 import type {
   CrawlRuleConfig,
   FieldCleanRule,
   FieldRule,
   PageSnapshotDto,
   PluginDto,
+  RuleDto,
+  RuleRequestConfig,
   TesterDetailResultDto,
   TesterListResultDto,
 } from '@webcrawler/shared'
 import {
   fetchSnapshot,
+  listCategories,
   testDetailRule,
   testListRule,
 } from '@/api/tester'
+import { getRule } from '@/api/rules'
 import { listPlugins } from '@/api/plugins'
 import {
   createEmptyDraft,
@@ -46,8 +50,58 @@ import {
 /** 模板里不能出现 `://`，统一从脚本传占位文案。 */
 const LIST_URL_HINT = 'https://example.com/news'
 
+const route = useRoute()
+const router = useRouter()
+
 const draft = ref<TesterDraft>(loadTesterDraft() ?? createEmptyDraft())
 const { hasUnsavedChanges, flush } = useTesterDraft(draft)
+
+/* ------------------------------ 关联规则 ------------------------------ */
+
+/**
+ * 从规则列表 / 规则弹窗跳过来时带 `?ruleId=`：载入该规则并锁定保存目标，
+ * 测试满意后直接保存回同一条规则（版本 +1），不用再手选「更新哪条」。
+ */
+const linkedRule = ref<RuleDto | null>(null)
+const linkedLoading = ref(false)
+
+const testerTitle = computed(() => {
+  if (linkedLoading.value) return '规则测试器 · 正在载入规则…'
+  return linkedRule.value ? `规则测试器 · ${linkedRule.value.name} v${linkedRule.value.version}` : '规则测试器'
+})
+
+async function loadLinkedRule(): Promise<void> {
+  const raw = route.query.ruleId
+  const id = typeof raw === 'string' ? Number(raw) : Number.NaN
+  if (!Number.isInteger(id) || id <= 0) {
+    linkedRule.value = null
+    return
+  }
+  linkedLoading.value = true
+  try {
+    const detail = await getRule(id)
+    linkedRule.value = detail
+    onImported(detail.config)
+    // 规则本身带了列表页地址就直接用；否则退到栏目配置的 listUrl，省一次手填
+    const ruleListUrl = typeof detail.config?.list?.url === 'string' ? detail.config.list.url.trim() : ''
+    if (ruleListUrl) {
+      draft.value.url = ruleListUrl
+    } else if (detail.categoryId) {
+      const page = await listCategories(detail.siteId).catch(() => null)
+      const category = page?.items.find((item) => item.id === detail.categoryId)
+      if (category?.listUrl) draft.value.url = category.listUrl
+    }
+    ElMessage.success(`已载入规则「${detail.name}」v${detail.version}，可直接测试并保存`)
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '载入规则失败')
+  } finally {
+    linkedLoading.value = false
+  }
+}
+
+function backToRules(): void {
+  void router.push({ path: '/rules' })
+}
 
 /* ------------------------------ 插件选项 ------------------------------ */
 
@@ -100,7 +154,16 @@ void loadPluginOptions()
 
 onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload)
+  void loadLinkedRule()
 })
+
+// 同一页面内换 ruleId（例如从历史记录/手改地址）时重新载入
+watch(
+  () => route.query.ruleId,
+  () => {
+    void loadLinkedRule()
+  },
+)
 onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
 
 function onBeforeUnload(event: BeforeUnloadEvent): void {
@@ -372,6 +435,27 @@ function listFieldsToRuleFields(): Record<string, FieldRule> {
 
 /* ------------------------------ 规则组装与保存 ------------------------------ */
 
+/**
+ * 测试器界面没覆盖到的原始配置（request 里的 method/headers/timeout、clean、validate 等）
+ * 原样带到保存结果里，避免「在测试器里保存一次就丢字段」。
+ */
+const configExtras = ref<Record<string, unknown>>({})
+const requestExtras = ref<RuleRequestConfig>({})
+const listUrlExtra = ref('')
+
+/** 由草稿界面管理的顶层键，其余键视为「透传配置」。 */
+const MANAGED_CONFIG_KEYS = new Set([
+  'version',
+  'request',
+  'list',
+  'pagination',
+  'detail',
+  'fields',
+  'parserPlugins',
+  'excludeSelectors',
+  'collectScope',
+])
+
 const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   const fields = fieldsToRuleFields()
   const listPlugin = trimmed(draft.value.list.plugin)
@@ -380,20 +464,23 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   if (!hasList && Object.keys(fields).length === 0 && !detailPlugin) return null
 
   const config: CrawlRuleConfig = {
+    ...(configExtras.value as Partial<CrawlRuleConfig>),
     version: 1,
-    request: { mode: draft.value.mode },
+    request: { ...requestExtras.value, mode: draft.value.mode },
   }
   if (hasList) {
     const listFieldRules = listFieldsToRuleFields()
     config.list = listPlugin
       ? {
           plugin: listPlugin,
+          ...(listUrlExtra.value ? { url: listUrlExtra.value } : {}),
           ...(draft.value.list.excludeSelectors.length > 0
             ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
             : {}),
         }
       : {
           itemSelector: trimmed(draft.value.list.itemSelector),
+          ...(listUrlExtra.value ? { url: listUrlExtra.value } : {}),
           ...(Object.keys(listFieldRules).length > 0 ? { fields: listFieldRules } : {}),
           ...(draft.value.list.excludeSelectors.length > 0
             ? { excludeSelectors: [...draft.value.list.excludeSelectors] }
@@ -418,11 +505,22 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   if (!detailPlugin && draft.value.parserPlugins.length > 0) {
     config.parserPlugins = [...draft.value.parserPlugins]
   }
+  if (draft.value.collectScope === 'list') config.collectScope = 'list'
   return config
 })
 
 function onImported(config: CrawlRuleConfig): void {
   draft.value.url = draft.value.url // 保持当前地址
+  // 先记下界面不覆盖的部分，保存时原样带回
+  const extras: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(config)) {
+    if (!MANAGED_CONFIG_KEYS.has(key)) extras[key] = value
+  }
+  configExtras.value = extras
+  const { mode: _mode, ...restRequest } = config.request ?? {}
+  requestExtras.value = restRequest as RuleRequestConfig
+  listUrlExtra.value = typeof config.list?.url === 'string' ? config.list.url : ''
+  draft.value.collectScope = config.collectScope === 'list' ? 'list' : 'full'
   draft.value.list.plugin = config.list?.plugin ?? ''
   draft.value.detailPlugin = config.detail?.plugin ?? ''
   draft.value.list.itemSelector = config.list?.itemSelector ?? ''
@@ -490,9 +588,10 @@ function toFieldDraft(key: string, rule: FieldRule): TesterFieldDraft {
   }
 }
 
-function onSaved(): void {
+function onSaved(ruleId: number, rule: RuleDto): void {
   flush()
   hasUnsavedChanges.value = false
+  if (linkedRule.value?.id === ruleId) linkedRule.value = rule
 }
 
 /* ------------------------------ 右侧结果（按页签各自保存） ------------------------------ */
@@ -526,7 +625,10 @@ const requestInfo = computed(() => {
   <div class="tester">
     <!-- 顶栏：标题 / 地址 / 模式 / 代理 / 加载 -->
     <header class="topbar">
-      <h1 class="tester-title">规则测试器</h1>
+      <el-button v-if="linkedRule" text class="back-btn" title="返回采集规则" @click="backToRules">
+        <ArrowLeft :size="15" />
+      </el-button>
+      <h1 class="tester-title" :class="{ 'is-linked': linkedRule }">{{ testerTitle }}</h1>
       <el-input
         v-model="draft.url"
         class="url-input"
@@ -568,6 +670,16 @@ const requestInfo = computed(() => {
       <div class="divider" @mousedown="startLeftDivider" />
 
       <section class="pane pane-middle">
+        <div class="plugin-row scope-row">
+          <span class="plugin-row__label">采集范围</span>
+          <el-radio-group v-model="draft.collectScope" size="small">
+            <el-radio-button value="full">列表 + 详情</el-radio-button>
+            <el-radio-button value="list">仅列表</el-radio-button>
+          </el-radio-group>
+          <span class="binding-hint">
+            {{ draft.collectScope === 'list' ? '只入库列表项（标题 + 链接），正文稍后单篇 / 批量补采' : '列表与正文一次采完' }}
+          </span>
+        </div>
         <el-tabs v-model="middleTab" class="middle-tabs">
           <el-tab-pane label="列表规则" name="list">
             <div class="plugin-row">
@@ -742,7 +854,12 @@ const requestInfo = computed(() => {
           :payload="activeResult?.payload"
           :payload-label="activeResult?.label ?? ''"
         />
-        <SavePanel :config="ruleConfig" @saved="onSaved" @imported="onImported" />
+        <SavePanel
+          :config="ruleConfig"
+          :rule="linkedRule"
+          @saved="onSaved"
+          @imported="onImported"
+        />
       </section>
     </div>
   </div>
@@ -752,7 +869,9 @@ const requestInfo = computed(() => {
 .tester {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--wb-header-height));
+  /* 布局容器上下各有内边距，只减 --wb-header-height 会让页面多出 20px 滚动 */
+  --tester-gap: 52px;
+  height: calc(100vh - var(--wb-header-height) - var(--tester-gap));
   overflow: hidden;
 }
 
@@ -778,6 +897,17 @@ const requestInfo = computed(() => {
   .tester-title {
     display: none;
   }
+}
+
+.back-btn {
+  flex: 0 0 auto;
+  padding: 0 6px;
+}
+
+.tester-title.is-linked {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .url-input {
@@ -813,6 +943,13 @@ const requestInfo = computed(() => {
 .pane > :first-child {
   flex: 1;
   min-height: 0;
+}
+
+/* 中栏第一个子元素是采集范围行，不参与「填满剩余高度」（否则会把页签压到底部） */
+.pane-middle > .scope-row {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  padding: 10px 0 2px;
 }
 
 .pane-middle {
@@ -898,7 +1035,7 @@ const requestInfo = computed(() => {
 @media (max-width: 1180px) {
   .tester {
     height: auto;
-    min-height: calc(100vh - var(--wb-header-height));
+    min-height: calc(100vh - var(--wb-header-height) - var(--tester-gap));
     overflow: auto;
   }
 
