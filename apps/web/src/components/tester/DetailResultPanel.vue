@@ -34,7 +34,6 @@ async function copyJson(): Promise<void> {
     <div class="head">
       <el-button
         type="primary"
-        size="small"
         :loading="testing"
         :disabled="!hasFields && !pluginMode"
         :icon="RefreshCw"
@@ -42,7 +41,7 @@ async function copyJson(): Promise<void> {
       >
         测试详情规则
       </el-button>
-      <el-button v-if="result" size="small" :icon="Copy" @click="copyJson">复制 JSON</el-button>
+      <el-button v-if="result" :icon="Copy" @click="copyJson">复制 JSON</el-button>
       <span v-if="result" class="summary" :class="result.ok ? 'is-ok' : 'is-bad'">{{ result.message }}</span>
     </div>
 

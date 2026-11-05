@@ -220,13 +220,13 @@ function importJson(event: Event): void {
     <div class="row">
       <label>
         <span>所属网站</span>
-        <el-select v-model="siteId" size="small" placeholder="选择站点" filterable>
+        <el-select v-model="siteId" placeholder="选择站点" filterable>
           <el-option v-for="site in sites" :key="site.id" :value="site.id" :label="site.name" />
         </el-select>
       </label>
       <label>
         <span>绑定栏目（可选）</span>
-        <el-select v-model="categoryId" size="small" placeholder="不关联" clearable :disabled="!siteId">
+        <el-select v-model="categoryId" placeholder="不关联" clearable :disabled="!siteId">
           <el-option v-for="category in categories" :key="category.id" :value="category.id" :label="category.name" />
         </el-select>
       </label>
@@ -235,23 +235,22 @@ function importJson(event: Event): void {
     <div class="row">
       <label>
         <span>规则名称</span>
-        <el-input v-model="ruleName" size="small" placeholder="示例站新闻规则" />
+        <el-input v-model="ruleName" placeholder="示例站新闻规则" />
       </label>
       <label>
         <span>描述（可选）</span>
-        <el-input v-model="ruleDescription" size="small" placeholder="备注" />
+        <el-input v-model="ruleDescription" placeholder="备注" />
       </label>
     </div>
 
     <div v-if="!rule" class="row">
-      <el-radio-group v-model="saveMode" size="small">
+      <el-radio-group v-model="saveMode">
         <el-radio-button value="create">保存为新规则</el-radio-button>
         <el-radio-button value="update">更新已有规则</el-radio-button>
       </el-radio-group>
       <el-select
         v-if="saveMode === 'update'"
         v-model="updateTargetId"
-        size="small"
         placeholder="选择要更新的规则"
         filterable
       >
@@ -265,12 +264,12 @@ function importJson(event: Event): void {
     </div>
 
     <div class="actions">
-      <el-button type="primary" size="small" :icon="Save" :loading="saving" :disabled="!canSave" @click="save">
+      <el-button type="primary" :icon="Save" :loading="saving" :disabled="!canSave" @click="save">
         {{ rule ? '保存修改' : '保存规则' }}
       </el-button>
-      <el-button size="small" :loading="validating" @click="validate">校验 Schema</el-button>
-      <el-button size="small" :icon="Upload" @click="fileInputRef?.click()">导入 JSON</el-button>
-      <el-button size="small" :icon="Download" @click="exportJson">导出 JSON</el-button>
+      <el-button :loading="validating" @click="validate">校验 Schema</el-button>
+      <el-button :icon="Upload" @click="fileInputRef?.click()">导入 JSON</el-button>
+      <el-button :icon="Download" @click="exportJson">导出 JSON</el-button>
       <input ref="fileInputRef" type="file" accept=".json,application/json" hidden @change="importJson" />
     </div>
 
@@ -282,13 +281,7 @@ function importJson(event: Event): void {
 .save-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--wb-border);
-  background: var(--wb-surface-muted);
-  /* 右栏可能被拖得很窄：面板内部允许滚动，页面本身不出现滚动条 */
-  max-height: 62%;
-  overflow-y: auto;
+  gap: 12px;
 }
 
 .linked {
@@ -344,6 +337,9 @@ function importJson(event: Event): void {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  border-top: 1px solid var(--wb-border);
+  padding-top: 12px;
+  margin-top: 2px;
 }
 
 .hint {

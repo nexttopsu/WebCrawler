@@ -86,9 +86,8 @@ const srcdoc = computed(() => buildPreviewDocument(displayHtml.value))
         已排除 {{ removedCount }} 个节点（实时生效）
       </span>
       <div class="preview-actions">
-        <el-button-group size="small" class="strip-group">
+        <el-button-group class="strip-group">
           <el-button
-            size="small"
             :icon="Eraser"
             :type="stripActive ? 'primary' : ''"
             :disabled="!snapshotHtml"
@@ -97,7 +96,6 @@ const srcdoc = computed(() => buildPreviewDocument(displayHtml.value))
             去除
           </el-button>
           <el-button
-            size="small"
             :icon="RotateCcw"
             :disabled="!stripActive"
             @click="restoreExclude"
@@ -105,7 +103,7 @@ const srcdoc = computed(() => buildPreviewDocument(displayHtml.value))
             还原
           </el-button>
         </el-button-group>
-        <el-radio-group v-model="viewMode" size="small">
+        <el-radio-group v-model="viewMode">
           <el-radio-button value="page">网页预览</el-radio-button>
           <el-radio-button value="html">查看 HTML</el-radio-button>
         </el-radio-group>

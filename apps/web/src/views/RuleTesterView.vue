@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Globe, MonitorPlay } from '@lucide/vue'
+import { ArrowLeft, FileJson, Globe, MonitorPlay, Save } from '@lucide/vue'
 import type {
   CrawlRuleConfig,
   FieldCleanRule,
@@ -202,11 +202,16 @@ const activeExcludeSelectors = computed(() =>
   middleTab.value === 'list' ? draft.value.list.excludeSelectors : draft.value.excludeSelectors,
 )
 
-/* ------------------------------ 布局 ------------------------------ */
+/* ------------------------------ 布局与抽屉 ------------------------------ */
 
 const containerRef = ref<HTMLElement | null>(null)
-const { leftRatio, rightRatio, startLeftDivider, startRightDivider } = usePanelResize(containerRef)
+const { leftRatio, startLeftDivider } = usePanelResize(containerRef)
 const middleTab = ref<'list' | 'detail'>('list')
+
+/** 测试结果（JSON / 请求信息）收进抽屉，按需打开，主工作区保持两栏。 */
+const resultDrawer = ref(false)
+/** 保存 / 校验 / 导入导出同样收进抽屉。 */
+const saveDrawer = ref(false)
 
 /* ------------------------------ 页面快照（按页签各自保存） ------------------------------ */
 
@@ -302,20 +307,12 @@ async function runListTest(): Promise<void> {
 
 function buildPagination():
     | { type: 'query'; parameter: string; maxPages?: number }
-    | { type: 'path'; pathPattern: string; maxPages?: number }
-    | { type: 'next' }
-    | { type: 'cursor'; cursorParameter?: string; maxPages?: number } {
+    | { type: 'path'; pathPattern: string; maxPages?: number } {
   const { paginationType, paginationParameter, paginationPathPattern, maxPages } = draft.value.list
-  if (paginationType === 'query') {
-    return { type: 'query', parameter: paginationParameter || 'page', ...(maxPages ? { maxPages } : {}) }
-  }
   if (paginationType === 'path') {
     return { type: 'path', pathPattern: paginationPathPattern || '/page/{page}', ...(maxPages ? { maxPages } : {}) }
   }
-  if (paginationType === 'cursor') {
-    return { type: 'cursor', cursorParameter: paginationParameter || 'cursor', ...(maxPages ? { maxPages } : {}) }
-  }
-  return { type: 'next' }
+  return { type: 'query', parameter: paginationParameter || 'page', ...(maxPages ? { maxPages } : {}) }
 }
 
 function pickDetail(url: string): void {
@@ -432,6 +429,29 @@ function fieldsToRuleFields(): Record<string, FieldRule> {
 function listFieldsToRuleFields(): Record<string, FieldRule> {
   return draftFieldsToRuleFields(draft.value.list.listFields)
 }
+
+/* ------------------------------ 分页（仅已实现的方式） ------------------------------ */
+
+/**
+ * 界面只提供已实现的分页方式；`next`（下一页链接）/ `cursor`（游标）
+ * 服务端第一版明确拒绝，不再在界面上露出。
+ */
+const PAGINATION_OPTIONS = [
+  { value: 'none', label: '不翻页' },
+  { value: 'query', label: '页码参数（?page=N）' },
+  { value: 'path', label: '路径模板（/page/{page}）' },
+] as const
+
+function setPaginationType(value: unknown): void {
+  draft.value.list.paginationType = value === 'query' || value === 'path' ? value : 'none'
+}
+
+const maxPagesModel = computed<number | undefined>({
+  get: () => draft.value.list.maxPages ?? undefined,
+  set: (value) => {
+    draft.value.list.maxPages = typeof value === 'number' ? value : null
+  },
+})
 
 /* ------------------------------ 规则组装与保存 ------------------------------ */
 
@@ -550,7 +570,14 @@ function onImported(config: CrawlRuleConfig): void {
   }
   draft.value.list.listFields = importedListFields.map(([key, rule]) => toFieldDraft(key, rule))
   const pagination = config.pagination
-  draft.value.list.paginationType = pagination?.type ?? 'none'
+  const rawPaginationType = pagination?.type ?? 'none'
+  if (rawPaginationType === 'next' || rawPaginationType === 'cursor') {
+    // 未实现的分页方式：界面与保存校验都不支持，回退为不翻页并提示
+    draft.value.list.paginationType = 'none'
+    ElMessage.warning('该规则使用了未实现的分页方式（下一页链接 / 游标），已回退为不翻页')
+  } else {
+    draft.value.list.paginationType = rawPaginationType
+  }
   draft.value.list.paginationParameter = pagination?.parameter ?? 'page'
   draft.value.list.paginationPathPattern = pagination?.pathPattern ?? '/page/{page}'
   draft.value.list.maxPages = pagination?.maxPages ?? null
@@ -592,11 +619,12 @@ function onSaved(ruleId: number, rule: RuleDto): void {
   flush()
   hasUnsavedChanges.value = false
   if (linkedRule.value?.id === ruleId) linkedRule.value = rule
+  saveDrawer.value = false
 }
 
 /* ------------------------------ 右侧结果（按页签各自保存） ------------------------------ */
 
-/** 列表 / 详情页签各自的右侧结果面板内容，切换页签互不影响。 */
+/** 列表 / 详情页签各自的测试结果载荷，切换页签互不影响。 */
 const results = reactive<{ list: { payload: unknown; label: string } | null; detail: { payload: unknown; label: string } | null }>({
   list: null,
   detail: null,
@@ -623,25 +651,26 @@ const requestInfo = computed(() => {
 
 <template>
   <div class="tester">
-    <!-- 顶栏：标题 / 地址 / 模式 / 代理 / 加载 -->
+    <!-- 顶栏：标题 / 地址与加载 / 模式 / 代理 / 结果与保存入口 -->
     <header class="topbar">
       <el-button v-if="linkedRule" text class="back-btn" title="返回采集规则" @click="backToRules">
         <ArrowLeft :size="15" />
       </el-button>
       <h1 class="tester-title" :class="{ 'is-linked': linkedRule }">{{ testerTitle }}</h1>
-      <el-input
-        v-model="draft.url"
-        class="url-input"
-        size="default"
-        :placeholder="LIST_URL_HINT"
-        clearable
-        @keyup.enter="loadPage"
-      >
-        <template #prefix>
-          <Globe :size="14" />
-        </template>
-      </el-input>
-      <el-radio-group v-model="draft.mode" size="default">
+      <div class="url-group">
+        <el-input
+          v-model="draft.url"
+          :placeholder="LIST_URL_HINT"
+          clearable
+          @keyup.enter="loadPage"
+        >
+          <template #prefix>
+            <Globe :size="14" />
+          </template>
+        </el-input>
+        <el-button type="primary" :loading="listLoading" @click="loadPage">加载页面</el-button>
+      </div>
+      <el-radio-group v-model="draft.mode">
         <el-radio-button value="http">
           <span class="mode-label"><Globe :size="13" /> HTTP</span>
         </el-radio-button>
@@ -650,10 +679,15 @@ const requestInfo = computed(() => {
         </el-radio-button>
       </el-radio-group>
       <ProxySelect v-model="draft.proxyId" />
-      <el-button type="primary" :loading="listLoading" @click="loadPage">加载页面</el-button>
+      <div class="topbar-actions">
+        <el-badge is-dot :hidden="!activeResult" class="result-badge">
+          <el-button :icon="FileJson" @click="resultDrawer = true">测试结果</el-button>
+        </el-badge>
+        <el-button type="primary" plain :icon="Save" @click="saveDrawer = true">保存规则</el-button>
+      </div>
     </header>
 
-    <!-- 三栏布局 -->
+    <!-- 双栏布局：左侧页面预览，右侧规则配置 -->
     <div ref="containerRef" class="columns">
       <section class="pane" :style="{ flexBasis: `${leftRatio * 100}%` }">
         <PreviewPane
@@ -669,199 +703,260 @@ const requestInfo = computed(() => {
 
       <div class="divider" @mousedown="startLeftDivider" />
 
-      <section class="pane pane-middle">
-        <div class="plugin-row scope-row">
-          <span class="plugin-row__label">采集范围</span>
-          <el-radio-group v-model="draft.collectScope" size="small">
+      <section class="pane pane-config">
+        <div class="scope-row">
+          <span class="scope-label">采集范围</span>
+          <el-radio-group v-model="draft.collectScope">
             <el-radio-button value="full">列表 + 详情</el-radio-button>
             <el-radio-button value="list">仅列表</el-radio-button>
           </el-radio-group>
-          <span class="binding-hint">
+          <span class="scope-hint">
             {{ draft.collectScope === 'list' ? '只入库列表项（标题 + 链接），正文稍后单篇 / 批量补采' : '列表与正文一次采完' }}
           </span>
         </div>
-        <el-tabs v-model="middleTab" class="middle-tabs">
+
+        <el-tabs v-model="middleTab" class="config-tabs">
+          <!-- 列表规则：选择器 → 字段 → 测试 → 高级 -->
           <el-tab-pane label="列表规则" name="list">
-            <div class="plugin-row">
-              <span class="plugin-row__label">列表插件</span>
-              <el-select
-                v-model="draft.list.plugin"
-                filterable
-                clearable
-                value-on-clear=""
-                size="small"
-                placeholder="不使用插件（改用抽取规则）"
-                class="plugin-row__select"
-              >
-                <el-option
-                  v-for="plugin in listPluginOptions"
-                  :key="plugin.pluginId"
-                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-                  :value="plugin.pluginId"
-                />
-              </el-select>
-              <span class="binding-hint">
-                全流程插件：传入分页后的完整地址，直接返回文章列表；选中后无需抽取规则
-              </span>
-            </div>
-            <div v-if="!hasListPlugin" class="plugin-row">
-              <span class="plugin-row__label">解析器插件（列表）</span>
-              <el-select
-                v-model="draft.list.parserPlugins"
-                multiple
-                filterable
-                allow-create
-                default-first-option
-                size="small"
-                placeholder="不使用插件"
-                class="plugin-row__select"
-              >
-                <el-option
-                  v-for="plugin in listParserPluginOptions"
-                  :key="plugin.pluginId"
-                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-                  :value="plugin.pluginId"
-                />
-              </el-select>
-              <span class="binding-hint">仅对列表字段提取后生效，与详情互不影响</span>
-            </div>
-            <div v-if="!hasListPlugin" class="plugin-row">
-              <span class="plugin-row__label">排除选择器（列表）</span>
-              <el-input
-                v-model="listExcludeInput"
-                size="small"
-                clearable
-                placeholder="如 .ad, .time（逗号分隔，可不填）"
-                class="plugin-row__select"
-              />
-              <span class="binding-hint">优先级最高：字段提取前先删除命中的节点（混淆 / 广告），可不填</span>
-            </div>
             <ListConfigPanel
               v-model:item-selector="draft.list.itemSelector"
-              v-model:pagination-type="draft.list.paginationType"
-              v-model:pagination-parameter="draft.list.paginationParameter"
-              v-model:pagination-path-pattern="draft.list.paginationPathPattern"
-              v-model:max-pages="draft.list.maxPages"
               :plugin-mode="hasListPlugin"
               :testing="listTesting"
               :result="listResult"
               :detail-url="detailUrl"
               @test="runListTest"
               @pick-detail="pickDetail"
-            />
-            <FieldConfigPanel
-              v-if="!hasListPlugin"
-              v-model:fields="draft.list.listFields"
-              class="list-fields-panel"
-              title="列表字段配置"
-              subtitle="title 与 url 必填；其余内置字段与详情规则一致，自定义字段随链接入库存入 extra"
-              :built-ins="ARTICLE_FIELD_PRESETS"
-              :required-keys="LIST_REQUIRED_FIELD_KEYS"
-            />
+            >
+              <FieldConfigPanel
+                v-if="!hasListPlugin"
+                v-model:fields="draft.list.listFields"
+                class="stack-section"
+                title="列表字段配置"
+                subtitle="title 与 url 必填；其余内置字段与详情规则一致，自定义字段随链接入库存入 extra"
+                :built-ins="ARTICLE_FIELD_PRESETS"
+                :required-keys="LIST_REQUIRED_FIELD_KEYS"
+              />
+            </ListConfigPanel>
+
+            <el-collapse class="advanced stack-section">
+              <el-collapse-item name="list">
+                <template #title>
+                  <span class="advanced-title">
+                    高级设置
+                    <el-tag size="small" v-if="hasListPlugin" effect="plain">列表插件已启用</el-tag>
+                  </span>
+                </template>
+
+                <div class="tester-field">
+                  <span class="tester-field__label">列表插件</span>
+                  <el-select
+                    v-model="draft.list.plugin"
+                    filterable
+                    clearable
+                    value-on-clear=""
+                    placeholder="不使用插件（改用抽取规则）"
+                  >
+                    <el-option
+                      v-for="plugin in listPluginOptions"
+                      :key="plugin.pluginId"
+                      :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                      :value="plugin.pluginId"
+                    />
+                  </el-select>
+                  <p class="tester-field__hint">
+                    全流程插件：传入分页后的完整地址，直接返回文章列表；选中后无需抽取规则与字段配置。
+                  </p>
+                </div>
+
+                <div class="tester-field">
+                  <span class="tester-field__label">解析器插件（列表）</span>
+                  <el-select
+                    v-model="draft.list.parserPlugins"
+                    multiple
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="不使用插件"
+                  >
+                    <el-option
+                      v-for="plugin in listParserPluginOptions"
+                      :key="plugin.pluginId"
+                      :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                      :value="plugin.pluginId"
+                    />
+                  </el-select>
+                  <p class="tester-field__hint">仅对列表字段提取后生效，与详情互不影响。</p>
+                </div>
+
+                <div class="tester-field">
+                  <span class="tester-field__label">排除选择器（列表）</span>
+                  <el-input
+                    v-model="listExcludeInput"
+                    clearable
+                    placeholder="如 .ad, .time（逗号分隔，可不填）"
+                  />
+                  <p class="tester-field__hint">优先级最高：字段提取前先删除命中的节点（混淆 / 广告），可不填。</p>
+                </div>
+
+                <div class="tester-field">
+                  <span class="tester-field__label">分页方式</span>
+                  <div class="pagination-row">
+                    <el-select
+                      class="pg-type"
+                      :model-value="draft.list.paginationType"
+                      @update:model-value="setPaginationType"
+                    >
+                      <el-option
+                        v-for="item in PAGINATION_OPTIONS"
+                        :key="item.value"
+                        :value="item.value"
+                        :label="item.label"
+                      />
+                    </el-select>
+                    <el-input
+                      v-if="draft.list.paginationType === 'query'"
+                      v-model="draft.list.paginationParameter"
+                      class="pg-field"
+                      placeholder="参数名，如 page"
+                    />
+                    <el-input
+                      v-else-if="draft.list.paginationType === 'path'"
+                      v-model="draft.list.paginationPathPattern"
+                      class="pg-field"
+                      placeholder="/page/{page}"
+                    />
+                    <template v-if="draft.list.paginationType !== 'none'">
+                      <span class="pg-label">最多</span>
+                      <el-input-number
+                        v-model="maxPagesModel"
+                        class="pg-max"
+                        :min="1"
+                        :max="100"
+                        controls-position="right"
+                      />
+                      <span class="pg-label">页</span>
+                    </template>
+                  </div>
+                  <p class="tester-field__hint">测试时只抓取当前页；分页配置随保存的规则在采集任务中生效。</p>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </el-tab-pane>
 
+          <!-- 详情规则：地址 → 字段 → 测试 → 高级 -->
           <el-tab-pane :label="detailTabLabel" name="detail">
-            <div class="plugin-row">
-              <span class="plugin-row__label">详情插件</span>
-              <el-select
-                v-model="draft.detailPlugin"
-                filterable
-                clearable
-                value-on-clear=""
-                size="small"
-                placeholder="不使用插件（改用字段规则）"
-                class="plugin-row__select"
-              >
-                <el-option
-                  v-for="plugin in detailPluginOptions"
-                  :key="plugin.pluginId"
-                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-                  :value="plugin.pluginId"
+            <div class="tester-field">
+              <span class="tester-field__label">详情页地址</span>
+              <div class="detail-url-row">
+                <el-input
+                  v-model="detailUrl"
+                  placeholder="从列表测试结果点击选择，或直接粘贴地址"
+                  clearable
+                  @keyup.enter="loadDetailSnapshot"
                 />
-              </el-select>
-              <span class="binding-hint">
-                全流程插件：传入详情页地址，直接返回文章数据对象；选中后无需字段配置
-              </span>
+                <el-button :loading="detailLoading" @click="loadDetailSnapshot">加载页面</el-button>
+              </div>
+              <p class="tester-field__hint">点击列表测试结果中的任一条链接，会自动填入并加载该详情页。</p>
             </div>
-            <div v-if="!hasDetailPlugin" class="plugin-row">
-              <span class="plugin-row__label">解析器插件（详情）</span>
-              <el-select
-                v-model="draft.parserPlugins"
-                multiple
-                filterable
-                allow-create
-                default-first-option
-                size="small"
-                placeholder="不使用插件"
-                class="plugin-row__select"
-              >
-                <el-option
-                  v-for="plugin in detailParserPluginOptions"
-                  :key="plugin.pluginId"
-                  :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
-                  :value="plugin.pluginId"
-                />
-              </el-select>
-              <span class="binding-hint">仅对详情字段提取后生效，与列表互不影响</span>
-            </div>
-            <div v-if="!hasDetailPlugin" class="plugin-row">
-              <span class="plugin-row__label">排除选择器（详情）</span>
-              <el-input
-                v-model="detailExcludeInput"
-                size="small"
-                clearable
-                placeholder="如 .ad, .author-info（逗号分隔，可不填）"
-                class="plugin-row__select"
-              />
-              <span class="binding-hint">优先级最高：字段提取前先删除命中的节点（混淆 / 广告），可不填</span>
-            </div>
-            <div class="detail-url-row">
-              <el-input
-                v-model="detailUrl"
-                size="small"
-                placeholder="详情页地址（可从列表测试结果点击选择）"
-                clearable
-                @keyup.enter="loadDetailSnapshot"
-              />
-              <el-button size="small" :loading="detailLoading" @click="loadDetailSnapshot">
-                加载页面
-              </el-button>
-            </div>
+
             <FieldConfigPanel
               v-if="!hasDetailPlugin"
               v-model:fields="draft.fields"
+              class="stack-section"
               title="字段配置"
               subtitle="与列表规则共用同一套内置字段；保存后可直接被采集引擎执行"
               :built-ins="ARTICLE_FIELD_PRESETS"
               :required-keys="DETAIL_REQUIRED_FIELD_KEYS"
             />
+
             <DetailResultPanel
               :result="detailResult"
               :testing="detailTesting"
               :has-fields="enabledFieldCount > 0"
               :plugin-mode="hasDetailPlugin"
+              class="stack-section"
               @test="runDetailTest"
             />
+
+            <el-collapse class="advanced stack-section">
+              <el-collapse-item name="detail">
+                <template #title>
+                  <span class="advanced-title">
+                    高级设置
+                    <el-tag size="small" v-if="hasDetailPlugin" effect="plain">详情插件已启用</el-tag>
+                  </span>
+                </template>
+
+                <div class="tester-field">
+                  <span class="tester-field__label">详情插件</span>
+                  <el-select
+                    v-model="draft.detailPlugin"
+                    filterable
+                    clearable
+                    value-on-clear=""
+                    placeholder="不使用插件（改用字段规则）"
+                  >
+                    <el-option
+                      v-for="plugin in detailPluginOptions"
+                      :key="plugin.pluginId"
+                      :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                      :value="plugin.pluginId"
+                    />
+                  </el-select>
+                  <p class="tester-field__hint">
+                    全流程插件：传入详情页地址，直接返回文章数据对象；选中后无需字段配置。
+                  </p>
+                </div>
+
+                <div class="tester-field">
+                  <span class="tester-field__label">解析器插件（详情）</span>
+                  <el-select
+                    v-model="draft.parserPlugins"
+                    multiple
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="不使用插件"
+                  >
+                    <el-option
+                      v-for="plugin in detailParserPluginOptions"
+                      :key="plugin.pluginId"
+                      :label="`${plugin.name}${plugin.description ? ` · ${plugin.description}` : ''}`"
+                      :value="plugin.pluginId"
+                    />
+                  </el-select>
+                  <p class="tester-field__hint">仅对详情字段提取后生效，与列表互不影响。</p>
+                </div>
+
+                <div class="tester-field">
+                  <span class="tester-field__label">排除选择器（详情）</span>
+                  <el-input
+                    v-model="detailExcludeInput"
+                    clearable
+                    placeholder="如 .ad, .author-info（逗号分隔，可不填）"
+                  />
+                  <p class="tester-field__hint">优先级最高：字段提取前先删除命中的节点（混淆 / 广告），可不填。</p>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </el-tab-pane>
         </el-tabs>
       </section>
-
-      <div class="divider" @mousedown="startRightDivider" />
-
-      <section class="pane" :style="{ flexBasis: `${rightRatio * 100}%` }">
-        <ResultPanel
-          :request="requestInfo"
-          :payload="activeResult?.payload"
-          :payload-label="activeResult?.label ?? ''"
-        />
-        <SavePanel
-          :config="ruleConfig"
-          :rule="linkedRule"
-          @saved="onSaved"
-          @imported="onImported"
-        />
-      </section>
     </div>
+
+    <!-- 测试结果抽屉：JSON 结果 / 请求信息 -->
+    <el-drawer v-model="resultDrawer" title="测试结果" size="540px" class="result-drawer">
+      <ResultPanel
+        :request="requestInfo"
+        :payload="activeResult?.payload"
+        :payload-label="activeResult?.label ?? ''"
+      />
+    </el-drawer>
+
+    <!-- 保存规则抽屉：站点 / 名称 / 校验 / 导入导出 -->
+    <el-drawer v-model="saveDrawer" title="保存规则" size="480px" class="save-drawer">
+      <SavePanel :config="ruleConfig" :rule="linkedRule" @saved="onSaved" @imported="onImported" />
+    </el-drawer>
   </div>
 </template>
 
@@ -878,6 +973,7 @@ const requestInfo = computed(() => {
 .topbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 10px 16px;
   background: var(--wb-surface);
@@ -893,10 +989,10 @@ const requestInfo = computed(() => {
   flex: 0 0 auto;
 }
 
-@media (max-width: 1180px) {
-  .tester-title {
-    display: none;
-  }
+.tester-title.is-linked {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .back-btn {
@@ -904,15 +1000,18 @@ const requestInfo = computed(() => {
   padding: 0 6px;
 }
 
-.tester-title.is-linked {
-  max-width: 280px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* 地址输入 + 加载按钮成组，占满中间弹性空间 */
+.url-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 340px;
+  min-width: 280px;
 }
 
-.url-input {
+.url-group .el-input {
   flex: 1;
-  max-width: 560px;
+  min-width: 180px;
 }
 
 .mode-label {
@@ -921,8 +1020,12 @@ const requestInfo = computed(() => {
   gap: 5px;
 }
 
-.proxy-select {
-  width: 240px;
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
 }
 
 .columns {
@@ -934,7 +1037,7 @@ const requestInfo = computed(() => {
 .pane {
   display: flex;
   flex-direction: column;
-  min-width: 220px;
+  min-width: 240px;
   min-height: 0;
   overflow: hidden;
   background: var(--wb-surface);
@@ -945,17 +1048,15 @@ const requestInfo = computed(() => {
   min-height: 0;
 }
 
-/* 中栏第一个子元素是采集范围行，不参与「填满剩余高度」（否则会把页签压到底部） */
-.pane-middle > .scope-row {
-  flex: 0 0 auto;
-  margin-bottom: 0;
-  padding: 10px 0 2px;
+.pane-config {
+  flex: 1;
+  padding: 0 14px;
+  overflow: hidden;
 }
 
-.pane-middle {
-  flex: 1;
-  padding: 0 12px;
-  overflow: auto;
+/* 配置栏第一个子元素是采集范围行，不参与「填满剩余高度」 */
+.pane-config > .scope-row {
+  flex: 0 0 auto;
 }
 
 .divider {
@@ -969,67 +1070,124 @@ const requestInfo = computed(() => {
   background: var(--wb-primary-soft);
 }
 
-.middle-tabs {
-  flex: 1;
-  min-height: 0;
-}
-
-.list-fields-panel {
-  margin-top: 14px;
-  border-top: 1px solid var(--wb-border);
-  padding-top: 12px;
-}
-
-.middle-tabs :deep(.el-tabs__content) {
-  overflow: auto;
-}
-
-.binding-row {
+.scope-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.binding-label {
-  font-size: 12px;
-  color: var(--wb-text-secondary);
-  white-space: nowrap;
-}
-
-.binding-hint {
-  font-size: 11.5px;
-  color: var(--wb-text-muted);
-}
-
-.plugin-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
   flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 0 2px;
 }
 
-.plugin-row__label {
+.scope-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--wb-text-secondary);
   white-space: nowrap;
 }
 
-.plugin-row__select {
-  flex: 0 1 300px;
-  min-width: 180px;
+.scope-hint {
+  font-size: 11.5px;
+  color: var(--wb-text-muted);
+}
+
+.config-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * 页签内容滚动：Element Plus 给 .el-tabs__content 默认加了 overflow: hidden，
+ * 内容过长会被直接裁掉，这里改回可滚动（页签头与采集范围行保持固定）。
+ */
+.config-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 分节：字段面板 / 结果面板 / 高级设置之间统一留白 + 分隔线 */
+.stack-section {
+  margin-top: 16px;
+  border-top: 1px solid var(--wb-border);
+  padding-top: 12px;
+}
+
+.advanced :deep(.el-collapse-item__header) {
+  height: 34px;
+  line-height: 34px;
+  font-size: 12.5px;
+}
+
+.advanced :deep(.el-collapse-item__content) {
+  padding-bottom: 14px;
+}
+
+.advanced-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--wb-text-secondary);
 }
 
 .detail-url-row {
   display: flex;
   gap: 8px;
-  margin-bottom: 10px;
+}
+
+.detail-url-row .el-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pagination-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pg-type {
+  width: 210px;
+}
+
+.pg-field {
+  flex: 1;
+  min-width: 150px;
+}
+
+.pg-label {
+  font-size: 12px;
+  color: var(--wb-text-muted);
+}
+
+.pg-max {
+  width: 110px;
+}
+
+/* 抽屉：结果面板撑满、保存面板随内容滚动 */
+.result-drawer :deep(.el-drawer__body) {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.result-drawer :deep(.result-panel) {
+  flex: 1;
+  min-height: 0;
+}
+
+.save-drawer :deep(.el-drawer__body) {
+  padding: 16px;
+  overflow: auto;
 }
 
 /*
- * 小屏幕：不允许再并排三栏，改为纵向排列并可滚动。
+ * 小屏幕：不再并排双栏，改为纵向排列并可滚动。
  * 拖拽把手隐藏，各面板固定最小高度，避免被压成 0。
  */
 @media (max-width: 1180px) {
@@ -1039,13 +1197,8 @@ const requestInfo = computed(() => {
     overflow: auto;
   }
 
-  .topbar {
-    flex-wrap: wrap;
-  }
-
-  .url-input {
+  .url-group {
     flex: 1 1 100%;
-    max-width: none;
   }
 
   .columns {
@@ -1064,7 +1217,7 @@ const requestInfo = computed(() => {
     max-height: 70vh;
   }
 
-  .pane-middle {
+  .pane-config {
     min-height: 520px;
     max-height: none;
     padding: 0 8px;

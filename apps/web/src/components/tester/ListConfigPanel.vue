@@ -4,14 +4,10 @@ import type { TesterListResultDto } from '@webcrawler/shared'
 import { RefreshCw } from '@lucide/vue'
 
 const props = defineProps<{
-  /** 列表模式配置（v-model 系列字段） */
+  /** 列表模式配置（v-model） */
   itemSelector: string
-  /** 选中全流程列表插件：列表由插件整段返回，只需填写分页方式 */
+  /** 选中全流程列表插件：列表由插件整段返回，无需选择器与列表字段 */
   pluginMode?: boolean
-  paginationType: 'none' | 'query' | 'path' | 'next' | 'cursor'
-  paginationParameter: string
-  paginationPathPattern: string
-  maxPages: number | null
   testing: boolean
   result: TesterListResultDto | null
   /** 当前详情模式选中的地址（用于高亮「进入详情测试」目标） */
@@ -20,21 +16,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:itemSelector': [value: string]
-  'update:paginationType': [value: 'none' | 'query' | 'path' | 'next' | 'cursor']
-  'update:paginationParameter': [value: string]
-  'update:paginationPathPattern': [value: string]
-  'update:maxPages': [value: number | null]
   test: []
   pickDetail: [url: string]
 }>()
-
-const PAGINATION_OPTIONS = [
-  { value: 'none', label: '不翻页' },
-  { value: 'query', label: '页码参数（?page=N）' },
-  { value: 'path', label: '路径模板（/page/{page}）' },
-  { value: 'next', label: '下一页链接（暂未实现，保存会被拒绝）' },
-  { value: 'cursor', label: '游标（暂未实现，保存会被拒绝）' },
-] as const
 
 const duplicateWarning = computed(() => {
   if (!props.result?.ok) return null
@@ -52,66 +36,25 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
 
 <template>
   <div class="list-config">
-    <div class="config-grid">
-      <label v-if="!pluginMode" class="span-2">
-        <span>列表项容器 itemSelector *</span>
-        <el-input
-          :model-value="itemSelector"
-          size="small"
-          placeholder=".news-item"
-          @update:model-value="emit('update:itemSelector', $event)"
-        />
-      </label>
-      <p v-else class="span-2 plugin-note">
-        列表由全流程插件返回，无需选择器与列表字段；只需设置下方分页方式。
-      </p>
-      <label>
-        <span>分页方式</span>
-        <el-select
-          :model-value="paginationType"
-          size="small"
-          @update:model-value="emit('update:paginationType', $event)"
-        >
-          <el-option v-for="item in PAGINATION_OPTIONS" :key="item.value" :value="item.value" :label="item.label" />
-        </el-select>
-      </label>
-      <div class="pair">
-        <label v-if="paginationType === 'query' || paginationType === 'cursor'">
-          <span>参数名</span>
-          <el-input
-            :model-value="paginationParameter"
-            size="small"
-            @update:model-value="emit('update:paginationParameter', $event)"
-          />
-        </label>
-        <label v-if="paginationType === 'path'">
-          <span>路径模板</span>
-          <el-input
-            :model-value="paginationPathPattern"
-            size="small"
-            placeholder="/page/{page}"
-            @update:model-value="emit('update:paginationPathPattern', $event)"
-          />
-        </label>
-        <label v-if="['query', 'path', 'cursor'].includes(paginationType)">
-          <span>最大页数</span>
-          <el-input-number
-            :model-value="maxPages ?? undefined"
-            size="small"
-            :min="1"
-            :max="999"
-            controls-position="right"
-            @update:model-value="emit('update:maxPages', $event ?? null)"
-          />
-        </label>
-      </div>
+    <div v-if="!pluginMode" class="tester-field">
+      <span class="tester-field__label">列表项容器 itemSelector <em class="req">*</em></span>
+      <el-input
+        :model-value="itemSelector"
+        placeholder=".news-item"
+        @update:model-value="emit('update:itemSelector', $event)"
+      />
+      <p class="tester-field__hint">列表里每篇文章重复出现的容器节点，例如 ul.list &gt; li.item。</p>
     </div>
+    <p v-else class="plugin-note">
+      列表由全流程插件整段返回，无需选择器与列表字段；分页方式在下方「高级设置」中配置。
+    </p>
 
+    <!-- 字段配置等插在核心配置与测试按钮之间（由父组件通过默认插槽传入） -->
+    <slot />
 
     <div class="test-row">
       <el-button
         type="primary"
-        size="small"
         :loading="testing"
         :disabled="!pluginMode && !itemSelector"
         :icon="RefreshCw"
@@ -152,23 +95,10 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
 </template>
 
 <style scoped>
-.config-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 12px;
-}
-
-.config-grid label,
-.pair label {
+.list-config {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--wb-text-secondary);
-}
-
-.span-2 {
-  grid-column: span 2;
+  min-width: 0;
 }
 
 .plugin-note {
@@ -178,21 +108,11 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
   color: var(--wb-text-muted);
 }
 
-
-.pair {
-  display: flex;
-  gap: 12px;
-}
-
-.pair label {
-  flex: 1;
-}
-
 .test-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 .test-summary {
@@ -208,7 +128,7 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
 }
 
 .dup {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 12px;
   padding: 4px 8px;
   border-radius: var(--wb-radius-sm);
@@ -216,7 +136,7 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
 }
 
 .dup.is-warn {
-  background: #fff7e6;
+  background: var(--wb-warning-soft);
   color: var(--wb-warning);
 }
 
@@ -226,7 +146,7 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
 }
 
 .links {
-  margin-top: 12px;
+  margin-top: 14px;
   border-top: 1px solid var(--wb-border);
   padding-top: 8px;
 }

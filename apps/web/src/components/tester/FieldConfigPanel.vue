@@ -122,7 +122,7 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
       </div>
       <div class="panel-actions">
         <el-dropdown v-if="availableBuiltIns().length > 0" trigger="click" @command="addBuiltIn">
-          <el-button size="small">添加内置字段</el-button>
+          <el-button>添加内置字段</el-button>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item v-for="item in availableBuiltIns()" :key="item.key" :command="item.key">
@@ -131,7 +131,7 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button size="small" type="primary" plain :icon="Plus" @click="addCustom">自定义</el-button>
+        <el-button type="primary" plain :icon="Plus" @click="addCustom">自定义</el-button>
       </div>
     </div>
 
@@ -143,57 +143,56 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
           <span class="field-title" :class="{ 'is-disabled': !field.enabled }">
             <code>{{ field.key }}</code>
             <span v-if="field.label">{{ field.label }}</span>
-            <el-tag v-if="field.required" size="small" type="danger" effect="plain">必填</el-tag>
-            <el-tag v-if="!field.enabled" size="small" type="info" effect="plain">停用</el-tag>
+            <el-tag size="small" v-if="field.required" type="danger" effect="plain">必填</el-tag>
+            <el-tag size="small" v-if="!field.enabled" type="info" effect="plain">停用</el-tag>
           </span>
         </template>
 
         <div class="field-grid">
           <label>
             <span>字段 key</span>
-            <el-input v-model="field.key" size="small" placeholder="title" />
+            <el-input v-model="field.key" placeholder="title" />
           </label>
           <label>
             <span>显示名称</span>
-            <el-input v-model="field.label" size="small" placeholder="标题" />
+            <el-input v-model="field.label" placeholder="标题" />
           </label>
           <label class="span-2">
             <span>Selector</span>
-            <el-input v-model="field.selector" size="small" placeholder=".article-title" />
+            <el-input v-model="field.selector" placeholder=".article-title" />
           </label>
           <label>
             <span>提取类型</span>
-            <el-select v-model="field.type" size="small">
+            <el-select v-model="field.type">
               <el-option v-for="item in FIELD_TYPES" :key="item.value" :value="item.value" :label="item.label" />
             </el-select>
           </label>
           <label>
             <span>属性名（attr）</span>
-            <el-input v-model="field.attribute" size="small" :disabled="field.type !== 'attr'" placeholder="src" />
+            <el-input v-model="field.attribute" :disabled="field.type !== 'attr'" placeholder="src" />
           </label>
           <div class="span-2 switches">
-            <el-checkbox v-model="field.multiple" size="small">多值</el-checkbox>
-            <el-checkbox v-model="field.required" size="small">必填</el-checkbox>
-            <el-checkbox v-model="field.trim" size="small">去首尾空白</el-checkbox>
-            <el-checkbox v-model="field.collapseWhitespace" size="small">折叠空白</el-checkbox>
-            <el-checkbox v-model="field.enabled" size="small">启用</el-checkbox>
+            <el-checkbox v-model="field.multiple">多值</el-checkbox>
+            <el-checkbox v-model="field.required">必填</el-checkbox>
+            <el-checkbox v-model="field.trim">去首尾空白</el-checkbox>
+            <el-checkbox v-model="field.collapseWhitespace">折叠空白</el-checkbox>
+            <el-checkbox v-model="field.enabled">启用</el-checkbox>
           </div>
           <label class="span-2">
             <span>默认值（缺失时兜底）</span>
-            <el-input v-model="field.defaultValue" size="small" placeholder="佚名" />
+            <el-input v-model="field.defaultValue" placeholder="佚名" />
           </label>
         </div>
 
         <div class="field-actions">
-          <el-button size="small" text :icon="ArrowUp" :disabled="index === 0" @click="moveField(index, -1)" />
+          <el-button text :icon="ArrowUp" :disabled="index === 0" @click="moveField(index, -1)" />
           <el-button
-            size="small"
             text
             :icon="ArrowDown"
             :disabled="index === fields.length - 1"
             @click="moveField(index, 1)"
           />
-          <el-button size="small" text type="danger" :icon="Trash2" @click="removeField(index)">删除</el-button>
+          <el-button text type="danger" :icon="Trash2" @click="removeField(index)">删除</el-button>
         </div>
       </el-collapse-item>
     </el-collapse>

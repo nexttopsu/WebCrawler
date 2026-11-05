@@ -33,6 +33,6 @@ onMounted(async () => {
 
 <style scoped>
 .proxy-select {
-  width: 240px;
+  width: 200px;
 }
 </style>

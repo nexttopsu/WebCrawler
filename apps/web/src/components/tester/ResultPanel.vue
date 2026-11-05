@@ -41,14 +41,14 @@ async function copyJson(): Promise<void> {
       </el-tabs>
       <div class="head-actions">
         <span v-if="jsonSize" class="size">{{ jsonSize }}</span>
-        <el-button size="small" text :icon="Copy" :disabled="!jsonText" @click="copyJson">复制</el-button>
+        <el-button text :icon="Copy" :disabled="!jsonText" @click="copyJson">复制</el-button>
       </div>
     </div>
 
     <div v-if="activeTab === 'json'" class="json-view">
       <p v-if="!jsonText" class="empty">暂无结果。加载页面或执行测试后，这里显示完整 JSON（可折叠）。</p>
       <template v-else>
-        <el-button size="small" text class="collapse-toggle" @click="collapsed = !collapsed">
+        <el-button text class="collapse-toggle" @click="collapsed = !collapsed">
           {{ collapsed ? '展开' : '折叠' }}
         </el-button>
         <pre v-if="!collapsed" class="json">{{ jsonText }}</pre>

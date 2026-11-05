@@ -103,13 +103,23 @@ export function createEmptyDraft(): TesterDraft {
   }
 }
 
-/** 合法的分页方式，用于把旧草稿里的非法值收敛回默认。 */
+/** 草稿里可能出现过的分页方式（含已废弃的历史值），用于识别旧数据。 */
 const PAGINATION_TYPES: ReadonlyArray<TesterDraft['list']['paginationType']> = [
   'none',
   'query',
   'path',
   'next',
   'cursor',
+]
+
+/**
+ * 实际支持的分页方式：`next`（下一页链接）/ `cursor`（游标）服务端第一版
+ * 明确拒绝保存，界面也不再提供，旧草稿里的这两个值回退为「不翻页」。
+ */
+const SUPPORTED_PAGINATION_TYPES: ReadonlyArray<TesterDraft['list']['paginationType']> = [
+  'none',
+  'query',
+  'path',
 ]
 
 export function loadTesterDraft(): TesterDraft | null {
@@ -128,7 +138,11 @@ export function loadTesterDraft(): TesterDraft | null {
     const namesOf = (value: unknown): string[] =>
       Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 
-    const paginationType = list.paginationType as TesterDraft['list']['paginationType']
+    const rawPaginationType = list.paginationType as TesterDraft['list']['paginationType']
+    // 旧草稿可能带着未实现的 next / cursor，统一收敛回支持的范围
+    const paginationType = PAGINATION_TYPES.includes(rawPaginationType)
+      ? (SUPPORTED_PAGINATION_TYPES.includes(rawPaginationType) ? rawPaginationType : 'none')
+      : 'none'
 
     return {
       ...defaults,
@@ -140,7 +154,7 @@ export function loadTesterDraft(): TesterDraft | null {
         ...defaults.list,
         plugin: stringOf(list, 'plugin', ''),
         itemSelector: stringOf(list, 'itemSelector', ''),
-        paginationType: PAGINATION_TYPES.includes(paginationType) ? paginationType : 'none',
+        paginationType,
         paginationParameter: stringOf(list, 'paginationParameter', defaults.list.paginationParameter),
         paginationPathPattern: stringOf(list, 'paginationPathPattern', defaults.list.paginationPathPattern),
         maxPages: typeof list.maxPages === 'number' ? list.maxPages : null,

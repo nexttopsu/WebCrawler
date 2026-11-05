@@ -332,6 +332,37 @@ p {
   word-break: break-word;
 }
 
+/* 规则测试器：统一的字段行（标题在上、控件居中、说明在下），配置面板各处共用 */
+.tester-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tester-field + .tester-field {
+  margin-top: 14px;
+}
+
+.tester-field__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wb-text-secondary);
+}
+
+.tester-field__label .req {
+  color: var(--wb-danger);
+  font-style: normal;
+  margin-left: 2px;
+}
+
+.tester-field__hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--wb-text-muted);
+}
+
 /* 正文阅读排版（文章详情） */
 .wb-article {
   font-size: 15px;
