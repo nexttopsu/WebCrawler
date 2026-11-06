@@ -12,14 +12,15 @@
  * - 下载失败、非图片内容、写盘失败 → `logger.warn` 记录原因，原样返回，绝不抛错。
  *
  * 其它说明：
- * - 文件名取图片最终地址（重定向后）的 SHA-256 前 20 位，确定性命名，
- *   同一图片重复采集直接复用已有文件，不重复下载；
+ * - 文件名取**完整图片链接**（补全后的下载地址）的 MD5（32 位十六进制），
+ *   确定性命名；下载前先按哈希前缀在本地目录查找已有文件，命中即跳过下载，
+ *   避免重复下载；
  * - 下载走 `ctx.request`（平台统一的代理 / SSRF / 超时路径），不要绕开；
  * - `/resources/**` 由后端托管（见 `src/server/lib/resources.ts`），
  *   dev 环境下 Vite 会把该前缀代理到后端，前端可直接展示。
  */
-import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import md5 from 'md5'
+import { existsSync, readdirSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { definePlugin } from '../../plugin-system/sdk.js'
@@ -147,8 +148,27 @@ function resolveCoverUrl(raw: string, pageUrl: string, ctx: PluginContext): stri
   return isHttpUrl(candidate) ? candidate : null
 }
 
-/** 对单条 coverUrl 执行「下载 → 校验内容 → 落盘」，返回可访问的 URL 路径；失败抛错。 */
-async function downloadCover(target: string, ctx: PluginContext): Promise<{ urlPath: string }> {
+/** 拼接资源访问 URL：/resources/covers/<站点>/<文件名>。 */
+function resourceUrl(dirName: string, fileName: string): string {
+  return `${RESOURCES_URL_PREFIX}/covers/${dirName}/${fileName}`
+}
+
+/** 对单条 coverUrl 执行「查本地 → 下载 → 校验内容 → 落盘」，返回可访问的 URL 路径；失败抛错。 */
+async function downloadCover(
+  target: string,
+  ctx: PluginContext,
+): Promise<{ urlPath: string; reused: boolean }> {
+  // 确定性文件名：完整图片链接的 MD5（32 位十六进制）
+  const hash = md5(target)
+  const dirName = sanitizeSegment(ctx.siteId ?? ctx.site?.domain ?? 'default')
+  const dir = resolve(SAVE_ROOT, dirName)
+
+  // 下载前先查本地：扩展名下载前未知，按「哈希.」前缀匹配任意扩展名
+  if (existsSync(dir)) {
+    const existing = readdirSync(dir).find((name) => name.startsWith(`${hash}.`))
+    if (existing) return { urlPath: resourceUrl(dirName, existing), reused: true }
+  }
+
   const response = await ctx.request.get(target, {
     maxBytes: IMAGE_MAX_BYTES,
     retries: 1,
@@ -166,20 +186,12 @@ async function downloadCover(target: string, ctx: PluginContext): Promise<{ urlP
   if (!isImage) throw new Error(`内容不是图片（Content-Type: ${contentType || '未知'}）`)
 
   const ext = extFromContentType(response.contentType) ?? extFromUrl(response.finalUrl) ?? '.jpg'
-  // 确定性文件名：最终地址（重定向后）的哈希，重复采集自动去重
-  const hash = createHash('sha256').update(response.finalUrl).digest('hex').slice(0, 20)
-  const dirName = sanitizeSegment(ctx.siteId ?? ctx.site?.domain ?? 'default')
-  const dir = resolve(SAVE_ROOT, dirName)
-  const filePath = resolve(dir, `${hash}${ext}`)
-
-  // 同一图片已有本地副本：跳过下载与写盘
-  if (!existsSync(filePath)) {
-    await mkdir(dir, { recursive: true })
-    await writeFile(filePath, body)
-  }
+  const fileName = `${hash}${ext}`
+  await mkdir(dir, { recursive: true })
+  await writeFile(resolve(dir, fileName), body)
 
   // 生成可直接访问的 URL 路径（服务端静态托管 /resources/**）
-  return { urlPath: `${RESOURCES_URL_PREFIX}/covers/${dirName}/${hash}${ext}` }
+  return { urlPath: resourceUrl(dirName, fileName), reused: false }
 }
 
 export default definePlugin({
@@ -187,7 +199,7 @@ export default definePlugin({
     id: 'generic-cover-download',
     name: '通用 · 缩略图下载',
     type: 'parser',
-    version: '1.1.0',
+    version: '1.2.0',
     description:
       '列表阶段检查 coverUrl，合法则下载图片到 resources/covers/ 并替换为 /resources/ 访问路径；无值或失败时保持原样',
   },
@@ -200,8 +212,8 @@ export default definePlugin({
     if (!target) return fields
 
     try {
-      const { urlPath } = await downloadCover(target, ctx)
-      ctx.logger.info(`缩略图已保存：${urlPath}（来源 ${target}）`)
+      const { urlPath, reused } = await downloadCover(target, ctx)
+      ctx.logger.info(reused ? `缩略图已存在，跳过下载：${urlPath}（来源 ${target}）` : `缩略图已保存：${urlPath}（来源 ${target}）`)
       return { ...fields, coverUrl: urlPath }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
