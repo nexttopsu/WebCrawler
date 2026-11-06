@@ -12,7 +12,7 @@ const props = defineProps<{
   subtitle?: string
   /** 内置字段预设；缺省为列表 / 详情共用的文章字段 */
   builtIns?: FieldPreset[]
-  /** 该场景下必须勾选「必填」的内置字段 key（列表 title / url、详情 title） */
+  /** 这些 key 的字段自动必填（列表 title / url、详情 title / content），不可勾选 */
   requiredKeys?: readonly string[]
 }>()
 
@@ -39,7 +39,17 @@ function isPresent(preset: FieldPreset): boolean {
 }
 
 function isRequired(preset: FieldPreset): boolean {
-  return (props.requiredKeys ?? []).includes(preset.key)
+  return fieldIsRequired(preset.key)
+}
+
+/** 必填由字段 key 决定（列表 title / url、详情 title / content），与勾选无关。 */
+function fieldIsRequired(key: string): boolean {
+  return (props.requiredKeys ?? []).includes(key)
+}
+
+/** 内置字段完全只读（key 不可改）；自定义字段只编辑 key，label 仅内置字段用于标题展示。 */
+function isCustom(field: TesterFieldDraft): boolean {
+  return field.key.startsWith('custom_')
 }
 
 function cloneFields(): TesterFieldDraft[] {
@@ -58,10 +68,8 @@ function addBuiltIn(key: string): void {
       selector: '',
       type: preset.type,
       attribute: preset.attribute ?? '',
-      multiple: false,
       required: isRequired(preset),
       defaultValue: '',
-      trim: true,
       collapseWhitespace: false,
       enabled: true,
     },
@@ -83,10 +91,8 @@ function addCustom(): void {
       selector: '',
       type: 'text',
       attribute: '',
-      multiple: false,
       required: false,
       defaultValue: '',
-      trim: true,
       collapseWhitespace: false,
       enabled: true,
     },
@@ -140,23 +146,20 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
     <el-collapse v-else>
       <el-collapse-item v-for="(field, index) in fields" :key="field.key" :name="field.key">
         <template #title>
-          <span class="field-title" :class="{ 'is-disabled': !field.enabled }">
+          <span class="field-title">
             <code>{{ field.key }}</code>
             <span v-if="field.label">{{ field.label }}</span>
-            <el-tag size="small" v-if="field.required" type="danger" effect="plain">必填</el-tag>
-            <el-tag size="small" v-if="!field.enabled" type="info" effect="plain">停用</el-tag>
+            <el-tag size="small" v-if="fieldIsRequired(field.key)" type="danger" effect="plain">必填</el-tag>
           </span>
         </template>
 
         <div class="field-grid">
-          <label>
-            <span>字段 key</span>
-            <el-input v-model="field.key" placeholder="title" />
-          </label>
-          <label>
-            <span>显示名称</span>
-            <el-input v-model="field.label" placeholder="标题" />
-          </label>
+          <template v-if="isCustom(field)">
+            <label class="span-2">
+              <span>字段 key</span>
+              <el-input v-model="field.key" placeholder="author" />
+            </label>
+          </template>
           <label class="span-2">
             <span>Selector</span>
             <el-input v-model="field.selector" placeholder=".article-title" />
@@ -172,11 +175,7 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
             <el-input v-model="field.attribute" :disabled="field.type !== 'attr'" placeholder="src" />
           </label>
           <div class="span-2 switches">
-            <el-checkbox v-model="field.multiple">多值</el-checkbox>
-            <el-checkbox v-model="field.required">必填</el-checkbox>
-            <el-checkbox v-model="field.trim">去首尾空白</el-checkbox>
             <el-checkbox v-model="field.collapseWhitespace">折叠空白</el-checkbox>
-            <el-checkbox v-model="field.enabled">启用</el-checkbox>
           </div>
           <label class="span-2">
             <span>默认值（缺失时兜底）</span>
@@ -238,10 +237,6 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
 
 .field-title code {
   color: var(--wb-primary);
-}
-
-.field-title.is-disabled {
-  opacity: 0.5;
 }
 
 .field-grid {

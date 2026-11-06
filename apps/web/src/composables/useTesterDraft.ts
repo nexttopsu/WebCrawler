@@ -46,8 +46,6 @@ export interface TesterDraft {
   parserPlugins: string[]
   /** 详情阶段排除选择器：字段提取前先删除命中的节点（优先级最高，可不填） */
   excludeSelectors: string[]
-  /** 采集范围：full = 列表 + 详情（缺省），list = 仅列表；写入 config.collectScope */
-  collectScope: 'full' | 'list'
 }
 
 export interface TesterFieldDraft {
@@ -56,10 +54,8 @@ export interface TesterFieldDraft {
   selector: string
   type: 'text' | 'html' | 'attr'
   attribute: string
-  multiple: boolean
   required: boolean
   defaultValue: string
-  trim: boolean
   collapseWhitespace: boolean
   enabled: boolean
 }
@@ -97,7 +93,6 @@ export function createEmptyDraft(): TesterDraft {
     detailPlugin: '',
     parserPlugins: [],
     excludeSelectors: [],
-    collectScope: 'full',
   }
 }
 
@@ -164,7 +159,6 @@ export function loadTesterDraft(): TesterDraft | null {
       detailPlugin: typeof parsed.detailPlugin === 'string' ? parsed.detailPlugin : '',
       parserPlugins: namesOf(parsed.parserPlugins),
       excludeSelectors: namesOf(parsed.excludeSelectors),
-      collectScope: parsed.collectScope === 'list' ? 'list' : 'full',
     }
   } catch {
     // 草稿损坏不应阻塞页面

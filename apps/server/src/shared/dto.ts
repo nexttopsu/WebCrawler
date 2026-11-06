@@ -66,6 +66,13 @@ export interface CategoryDto {
   id: number
   siteId: number
   name: string
+  /**
+   * 上级栏目 id；`null` 表示顶级栏目。
+   *
+   * 层级只用于组织与展示：父栏目本身也是可采集的真实栏目，
+   * 选中父栏目时只作用于它自己，不包含子栏目。
+   */
+  parentId: number | null
   code: string | null
   listUrl: string
   ruleId: number | null
@@ -77,6 +84,11 @@ export interface CategoryDto {
   description: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** 栏目树节点：`children` 为直接子栏目，叶子为空数组。 */
+export interface CategoryTreeNodeDto extends CategoryDto {
+  children: CategoryTreeNodeDto[]
 }
 
 /** 栏目详情：附带站点、规则与代理摘要。 */

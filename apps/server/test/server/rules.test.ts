@@ -212,6 +212,59 @@ describe('规则版本', () => {
   })
 })
 
+describe('规则复制', () => {
+  it('按当前配置复制出一条新规则，名称自动加副本后缀且不重名', async () => {
+    const site = await createSite(app, { name: '复制站', domain: domain('copy') })
+    const category = await createCategory(app, {
+      siteId: site.id,
+      name: '复制栏目',
+      listUrl: `https://${site.domain}/copy`,
+    })
+    const rule = await createRule(app, {
+      siteId: site.id,
+      name: '待复制规则',
+      categoryId: category.id,
+      config: sampleConfig({ clean: { keepImages: false } }),
+      status: 'disabled',
+      description: '原始描述',
+    })
+
+    const first = await call(app, `/api/rules/${rule.id}/duplicate`, json({}, 'POST'))
+    expect(first.status).toBe(201)
+    expect(first.body.data).toMatchObject({
+      siteId: site.id,
+      categoryId: category.id,
+      name: '待复制规则 副本',
+      version: 1,
+      status: 'disabled',
+      description: '原始描述',
+    })
+    expect(first.body.data.id).not.toBe(rule.id)
+    expect(first.body.data.config).toEqual(rule.config)
+    expect(first.headers.get('location')).toBe(`/api/rules/${first.body.data.id}`)
+
+    // 副本有自己独立的版本线
+    const versions = await call(app, `/api/rules/${first.body.data.id}/versions`)
+    expect(versions.body.data.items).toHaveLength(1)
+    expect(versions.body.data.items[0].note).toBe('创建规则')
+
+    // 再复制一次，名称自动递增
+    const second = await call(app, `/api/rules/${rule.id}/duplicate`, json({}, 'POST'))
+    expect(second.status).toBe(201)
+    expect(second.body.data.name).toBe('待复制规则 副本 2')
+
+    // 原规则不受影响
+    const source = await call(app, `/api/rules/${rule.id}`)
+    expect(source.body.data.name).toBe('待复制规则')
+    expect(source.body.data.version).toBe(1)
+  })
+
+  it('复制不存在的规则返回 404', async () => {
+    const response = await call(app, '/api/rules/999999/duplicate', json({}, 'POST'))
+    expect(response.status).toBe(404)
+  })
+})
+
 describe('规则继承', () => {
   it('站点默认规则 < 栏目规则 < 任务覆盖', async () => {
     const site = await createSite(app, { name: '继承站', domain: domain('inherit') })
@@ -269,6 +322,41 @@ describe('规则继承', () => {
     expect(withOverride.body.data.sources.at(-1)).toMatchObject({ scope: 'task', ruleId: null })
     expect(withOverride.body.data.config.list.itemSelector).toBe('.override-item')
     expect(withOverride.body.data.config.validate.minContentLength).toBe(50)
+  })
+
+  it('规则侧绑定（rule.categoryId）也能被解析命中，栏目侧绑定优先', async () => {
+    const site = await createSite(app, { name: '规则侧绑定站', domain: domain('bind') })
+    const category = await createCategory(app, {
+      siteId: site.id,
+      name: '绑定目标栏目',
+      listUrl: `https://${site.domain}/list`,
+    })
+    // 采集规则页「绑定栏目」保存的是 rule.categoryId，任务解析必须能认出来
+    const rule = await createRule(app, {
+      siteId: site.id,
+      categoryId: category.id,
+      name: '栏目绑定规则',
+      config: sampleConfig({ list: { itemSelector: '.bound-item' } }),
+    })
+
+    const resolved = await call(app, '/api/rules/resolve', json({ siteId: site.id, categoryId: category.id }))
+    expect(resolved.status).toBe(200)
+    expect(resolved.body.data.sources).toEqual([expect.objectContaining({ scope: 'category', ruleId: rule.id })])
+    expect(resolved.body.data.config.list.itemSelector).toBe('.bound-item')
+
+    // 栏目上显式选择的采集规则（category.ruleId）优先级更高
+    const categorySide = await createRule(app, {
+      siteId: site.id,
+      name: '栏目侧规则',
+      config: sampleConfig({ list: { itemSelector: '.category-side' } }),
+    })
+    await call(app, `/api/categories/${category.id}`, json({ ruleId: categorySide.id }, 'PATCH'))
+    const resolvedAgain = await call(app, '/api/rules/resolve', json({ siteId: site.id, categoryId: category.id }))
+    expect(resolvedAgain.body.data.sources.map((item: { ruleId: number | null }) => item.ruleId)).toEqual([
+      rule.id,
+      categorySide.id,
+    ])
+    expect(resolvedAgain.body.data.config.list.itemSelector).toBe('.category-side')
   })
 
   it('没有配置来源时返回空配置', async () => {

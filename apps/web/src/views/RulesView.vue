@@ -14,10 +14,11 @@ import {
   RefreshCw,
   Upload,
 } from '@lucide/vue'
-import type { CategoryDto, CrawlRuleStatus, RuleDto, RuleVersionDto, SiteDto } from '@webcrawler/shared'
+import type { CrawlRuleStatus, RuleDto, RuleVersionDto, SiteDto } from '@webcrawler/shared'
 import {
   createRule,
   deleteRule,
+  duplicateRule,
   getRule,
   getRuleVersion,
   listRuleVersions,
@@ -27,9 +28,9 @@ import {
   validateRuleConfig,
 } from '@/api/rules'
 import { listSites } from '@/api/sites'
-import { listCategories } from '@/api/categories'
 import { ApiClientError, errorMessage } from '@/api/client'
 import { useListQuery } from '@/composables/useListQuery'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SearchBar from '@/components/common/SearchBar.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
@@ -38,6 +39,7 @@ import StatusTag from '@/components/common/StatusTag.vue'
 import FormDialog from '@/components/common/FormDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import JsonViewer from '@/components/common/JsonViewer.vue'
+import CategorySelect from '@/components/common/CategorySelect.vue'
 
 const router = useRouter()
 
@@ -52,9 +54,9 @@ const list = useListQuery<RuleDto, { keyword: string; siteId?: number; status: s
 )
 
 const siteOptions = ref<SiteDto[]>([])
-const categoryOptions = ref<CategoryDto[]>([])
 const siteName = computed(() => new Map(siteOptions.value.map((site) => [site.id, site.name])))
-const categoryName = computed(() => new Map(categoryOptions.value.map((item) => [item.id, item.name])))
+/** 栏目 id → 完整层级路径，列表展示与绑定栏目下拉共用一份全量树。 */
+const { pathMap: categoryPath, load: loadCategoryTree } = useCategoryTree()
 
 async function loadSites(): Promise<void> {
   try {
@@ -62,19 +64,6 @@ async function loadSites(): Promise<void> {
     siteOptions.value = page.items
   } catch {
     siteOptions.value = []
-  }
-}
-
-async function loadCategories(siteId: number | null | undefined): Promise<void> {
-  if (!siteId) {
-    categoryOptions.value = []
-    return
-  }
-  try {
-    const page = await listCategories({ siteId, pageSize: 100 })
-    categoryOptions.value = page.items
-  } catch {
-    categoryOptions.value = []
   }
 }
 
@@ -93,19 +82,7 @@ const form = reactive({
   categoryId: null as number | null,
   name: '',
   description: '',
-  /** 采集范围（写入 config.collectScope）：full = 列表 + 详情，list = 仅列表 */
-  collectScope: 'full' as 'full' | 'list',
 })
-
-/**
- * 采集范围写入规则 JSON：选 full 时直接删掉该键 —— 缺省即「列表 + 详情」，
- * 这样老规则不会因为多出一个默认字段而每次保存都产生版本差异。
- */
-function applyCollectScope(config: Record<string, unknown>): Record<string, unknown> {
-  if (form.collectScope === 'list') config.collectScope = 'list'
-  else delete config.collectScope
-  return config
-}
 
 const DEFAULT_CONFIG = {
   version: 1,
@@ -164,11 +141,9 @@ function openCreate(): void {
     categoryId: null,
     name: '',
     description: '',
-    collectScope: 'full' as 'full' | 'list',
   })
   configText.value = JSON.stringify(DEFAULT_CONFIG, null, 2)
   validationErrors.value = []
-  if (form.siteId) void loadCategories(form.siteId)
   dialogVisible.value = true
 }
 
@@ -179,16 +154,13 @@ async function openEdit(row: RuleDto): Promise<void> {
     categoryId: row.categoryId,
     name: row.name,
     description: row.description ?? '',
-    collectScope: 'full' as 'full' | 'list',
   })
   configText.value = ''
   validationErrors.value = []
   dialogVisible.value = true
-  void loadCategories(row.siteId)
   try {
     const detail = await getRule(row.id)
     configText.value = JSON.stringify(detail.config, null, 2)
-    form.collectScope = detail.config?.collectScope === 'list' ? 'list' : 'full'
   } catch (error) {
     ElMessage.error(errorMessage(error))
   }
@@ -206,7 +178,7 @@ async function submit(goTest = false): Promise<void> {
 
   let config: Record<string, unknown>
   try {
-    config = applyCollectScope(JSON.parse(configText.value) as Record<string, unknown>)
+    config = JSON.parse(configText.value) as Record<string, unknown>
   } catch (error) {
     ElMessage.error(`规则不是合法 JSON：${(error as Error).message}`)
     return
@@ -244,20 +216,19 @@ async function submit(goTest = false): Promise<void> {
 
 /* --------------------------------- 复制 ---------------------------------- */
 
+const copyingId = ref<number | null>(null)
+
+/** 复制规则：服务端按当前配置建一条新规则，名称自动加「副本」后缀并避免重名。 */
 async function duplicate(row: RuleDto): Promise<void> {
+  copyingId.value = row.id
   try {
-    const detail = await getRule(row.id)
-    await createRule({
-      siteId: detail.siteId,
-      categoryId: detail.categoryId,
-      name: `${detail.name} 副本`.slice(0, 50),
-      config: detail.config,
-      description: detail.description,
-    })
-    ElMessage.success('已复制为新规则')
+    const copied = await duplicateRule(row.id)
+    ElMessage.success(`已复制为「${copied.name}」`)
     await list.load()
   } catch (error) {
     ElMessage.error(errorMessage(error))
+  } finally {
+    copyingId.value = null
   }
 }
 
@@ -296,7 +267,6 @@ async function onFileChange(event: Event): Promise<void> {
     openCreate()
     const imported = json as Record<string, unknown>
     configText.value = JSON.stringify(imported, null, 2)
-    form.collectScope = imported.collectScope === 'list' ? 'list' : 'full'
     ElMessage.success('已导入到编辑器，确认网站与名称后保存')
   } catch (error) {
     ElMessage.error(`文件不是合法 JSON：${errorMessage(error)}`)
@@ -399,6 +369,7 @@ function parserPluginCount(row: RuleDto): string {
 }
 
 void loadSites()
+void loadCategoryTree()
 </script>
 
 <template>
@@ -452,7 +423,7 @@ void loadSites()
             <span class="cell-title">{{ row.name }}</span>
             <span class="wb-muted cell-sub">
               {{ siteName.get(row.siteId) ?? `站点 #${row.siteId}` }}
-              <template v-if="row.categoryId"> · 栏目 {{ categoryName.get(row.categoryId) ?? `#${row.categoryId}` }}</template>
+              <template v-if="row.categoryId"> · 栏目 {{ categoryPath.get(row.categoryId) ?? `#${row.categoryId}` }}</template>
             </span>
           </div>
         </template>
@@ -476,7 +447,6 @@ void loadSites()
               <template v-else>旧版选择器写法</template>
               <template v-if="parserPluginCount(row)"> · 解析器插件 {{ parserPluginCount(row) }}</template>
               <template v-if="row.config?.detail?.plugin"> · 详情插件</template>
-              <template v-if="row.config?.collectScope === 'list'"> · 仅列表</template>
             </span>
           </div>
         </template>
@@ -494,7 +464,7 @@ void loadSites()
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="240" fixed="right">
+      <el-table-column label="操作" width="330" fixed="right">
         <template #default="{ row }">
           <div class="row-actions">
             <el-button size="small" text @click="openTester(row)">
@@ -509,16 +479,16 @@ void loadSites()
               <Pencil :size="13" />
               编辑
             </el-button>
+            <el-button size="small" text :loading="copyingId === row.id" @click="duplicate(row)">
+              <Copy :size="13" />
+              复制
+            </el-button>
             <el-dropdown trigger="click">
               <el-button size="small" text title="更多操作">
                 <Ellipsis :size="15" />
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item @click="duplicate(row)">
-                    <Copy :size="13" />
-                    <span>复制规则</span>
-                  </el-dropdown-item>
                   <el-dropdown-item @click="exportRule(row)">
                     <Download :size="13" />
                     <span>导出 JSON</span>
@@ -553,14 +523,16 @@ void loadSites()
       <el-form ref="formRef" :model="form" :rules="formRules" label-width="90px" class="rule-form">
         <div class="form-grid">
           <el-form-item label="所属网站" prop="siteId">
-            <el-select v-model="form.siteId" filterable placeholder="选择网站" style="width: 100%" @change="loadCategories(form.siteId)">
+            <el-select v-model="form.siteId" filterable placeholder="选择网站" style="width: 100%">
               <el-option v-for="site in siteOptions" :key="site.id" :label="site.name" :value="site.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="绑定栏目">
-            <el-select v-model="form.categoryId" clearable placeholder="站点级（作为默认规则）" style="width: 100%">
-              <el-option v-for="category in categoryOptions" :key="category.id" :label="category.name" :value="category.id" />
-            </el-select>
+            <CategorySelect
+              v-model="form.categoryId"
+              :site-id="form.siteId"
+              placeholder="站点级（作为默认规则）"
+            />
           </el-form-item>
         </div>
         <el-form-item label="规则名称" prop="name">
@@ -568,19 +540,6 @@ void loadSites()
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" maxlength="200" placeholder="可选" />
-        </el-form-item>
-        <el-form-item label="采集范围">
-          <el-radio-group v-model="form.collectScope">
-            <el-radio-button value="full">列表 + 详情</el-radio-button>
-            <el-radio-button value="list">仅列表</el-radio-button>
-          </el-radio-group>
-          <p class="plugin-hint">
-            {{
-              form.collectScope === 'list'
-                ? '只抓列表页并入库（标题 + 链接），文章详情状态记为「详情待采」，之后可在文章页单篇或批量补采。'
-                : '列表页与详情页一次采完。选「仅列表」会写入 collectScope=list，作为新建任务的默认值，任务里可以再改。'
-            }}
-          </p>
         </el-form-item>
         <el-form-item label="规则 JSON">
           <div class="json-editor">

@@ -5,6 +5,7 @@ import { createAppRuntime, type AppRuntime } from './app-runtime.js'
 import { loadConfig, type AppConfig } from './config.js'
 import { MethodNotAllowedError, NotFoundError } from './errors.js'
 import { createLogger, type Logger } from './lib/logger.js'
+import { createResourcesHandler } from './lib/resources.js'
 import { createCorsMiddleware } from './middleware/cors.js'
 import { createErrorHandler } from './middleware/error-handler.js'
 import { createRequestLogger } from './middleware/request-logger.js'
@@ -120,6 +121,10 @@ export function createApp(options: CreateAppOptions = {}): H3 {
   for (const route of routes) {
     app.on(route.method, route.path, route.handler)
   }
+
+  // 静态资源：仓库根 resources/ 目录（采集下载的缩略图等），必须注册在兜底路由之前。
+  // 用 all 注册让 HEAD 也能命中；GET/HEAD 之外的请求由 serveStatic 抛 405。
+  app.all('/resources/**', createResourcesHandler())
 
   // 兜底路由：保证未匹配的地址也返回统一结构
   app.all('/**', (event) => {

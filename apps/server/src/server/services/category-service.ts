@@ -1,5 +1,5 @@
 import { getModels, type CategoryRow } from '../../database/index.js'
-import type { CategoryDetailDto, CategoryDto, PaginatedData } from '../../shared/index.js'
+import type { CategoryDetailDto, CategoryDto, CategoryTreeNodeDto, PaginatedData } from '../../shared/index.js'
 import { z } from 'zod'
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js'
 import { keywordField, likePattern, paginationFields, runRawList, toPage } from '../lib/query.js'
@@ -15,7 +15,7 @@ import {
 } from './common.js'
 
 const CATEGORY_COLUMNS =
-  'id, siteId, name, code, listUrl, ruleId, proxyId, enabled, crawlInterval, sortOrder, description, createdAt, updatedAt'
+  'id, siteId, parentId, name, code, listUrl, ruleId, proxyId, enabled, crawlInterval, sortOrder, description, createdAt, updatedAt'
 
 const idField = z.number().int().positive()
 const listUrlField = z
@@ -28,6 +28,8 @@ const listUrlField = z
 export const categoryCreateSchema = z
   .object({
     siteId: idField,
+    /** 上级栏目；不传或传 null 表示顶级栏目 */
+    parentId: idField.nullable().optional(),
     name: z.string().trim().min(1).max(100),
     code: z
       .string()
@@ -58,11 +60,17 @@ export const categoryListQuerySchema = z.object({
   keyword: keywordField,
 })
 
+/** 树接口只按站点收窄，其余筛选交给前端在树上就地过滤。 */
+export const categoryTreeQuerySchema = z.object({
+  siteId: z.coerce.number().int().positive().optional(),
+})
+
 export const categoryStatusSchema = z.object({ enabled: z.boolean() }).strict()
 
 export type CategoryCreateInput = z.infer<typeof categoryCreateSchema>
 export type CategoryPatchInput = z.infer<typeof categoryPatchSchema>
 export type CategoryListQuery = z.infer<typeof categoryListQuerySchema>
+export type CategoryTreeQuery = z.infer<typeof categoryTreeQuerySchema>
 
 /** 栏目列表：按站点、启用状态与关键词筛选。 */
 export function listCategories(query: CategoryListQuery): PaginatedData<CategoryDto> {
@@ -96,6 +104,39 @@ export function listCategories(query: CategoryListQuery): PaginatedData<Category
   return toPage(rows.map(toCategoryDto), total, query.page, query.pageSize)
 }
 
+/**
+ * 栏目树：按上级关系组装成嵌套结构，同级按 `sortOrder`、`id` 排序。
+ *
+ * 层级是纯组织关系，树里的每个节点都是可采集的真实栏目，不做「父节点聚合子节点」
+ * 的展开。父栏目指向不存在的记录（历史脏数据）时按顶级节点展示，避免整棵子树消失。
+ */
+export function listCategoryTree(query: CategoryTreeQuery): CategoryTreeNodeDto[] {
+  const models = getModels()
+  const rows = query.siteId
+    ? models.category.findMany({ siteId: query.siteId })
+    : models.category.findMany({})
+
+  const ordered = [...rows].sort(
+    (left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0) || left.id - right.id,
+  )
+
+  const nodes = new Map<number, CategoryTreeNodeDto>()
+  for (const row of ordered) {
+    nodes.set(row.id, { ...toCategoryDto(row), children: [] })
+  }
+
+  const roots: CategoryTreeNodeDto[] = []
+  for (const row of ordered) {
+    const node = nodes.get(row.id)
+    if (!node) continue
+    const parent = row.parentId == null ? undefined : nodes.get(row.parentId)
+    if (parent && parent !== node) parent.children.push(node)
+    else roots.push(node)
+  }
+
+  return roots
+}
+
 /** 栏目详情：附带站点、规则与代理摘要（代理不含凭据）。 */
 export function getCategory(id: number): CategoryDetailDto {
   const category = findCategoryOrThrow(id)
@@ -121,6 +162,48 @@ function assertRuleInSite(ruleId: number, siteId: number): void {
     throw new ValidationError('规则必须属于该栏目所在的站点', [
       { path: 'ruleId', message: '规则不属于该站点', code: 'invalid_value' },
     ])
+  }
+}
+
+/**
+ * 校验上级栏目。
+ *
+ * 允许任意层级，只拦两种非法结构：跨站点挂载、成环（挂到自己或自己的后代下）。
+ * 遍历深度受现有数据约束，脏数据里的环会在遇到重复节点时提前结束。
+ */
+function assertParentUsable(parentId: number, siteId: number, selfId?: number): void {
+  const models = getModels()
+  const parent = models.category.findById(parentId)
+  // 上级不存在属于字段填错（而不是请求的目标资源不存在），统一报 400 并指到 parentId，
+  // 否则前端拿到的 404 会被当成「栏目已被删除」这类语义。
+  if (!parent) {
+    throw new ValidationError('上级栏目不存在', [
+      { path: 'parentId', message: '上级栏目不存在', code: 'invalid_value' },
+    ])
+  }
+  if (parent.siteId !== siteId) {
+    throw new ValidationError('上级栏目必须与当前栏目属于同一站点', [
+      { path: 'parentId', message: '上级栏目不属于该站点', code: 'invalid_value' },
+    ])
+  }
+  if (selfId === undefined) return
+  if (parentId === selfId) {
+    throw new ValidationError('栏目不能把自己设为上级栏目', [
+      { path: 'parentId', message: '不能指向自身', code: 'invalid_value' },
+    ])
+  }
+
+  const visited = new Set<number>([selfId])
+  let cursor: CategoryRow | undefined = parent
+  while (cursor?.parentId != null) {
+    if (cursor.parentId === selfId) {
+      throw new ValidationError('不能把栏目挂到自己的子栏目下', [
+        { path: 'parentId', message: '会形成循环层级', code: 'invalid_value' },
+      ])
+    }
+    if (visited.has(cursor.parentId)) break
+    visited.add(cursor.parentId)
+    cursor = models.category.findById(cursor.parentId)
   }
 }
 
@@ -157,13 +240,16 @@ function assertCategoryUnique(
 export function createCategory(input: CategoryCreateInput): CategoryDto {
   const site = findSiteOrThrow(input.siteId)
   const code = textOrNull(input.code)
+  const parentId = input.parentId ?? null
 
   assertCategoryUnique(input.siteId, { code, listUrl: input.listUrl })
+  if (parentId !== null) assertParentUsable(parentId, input.siteId)
   if (input.ruleId) assertRuleInSite(input.ruleId, input.siteId)
   if (input.proxyId) assertProxyUsable(input.proxyId)
 
   const created = getModels().category.create({
     siteId: site.id,
+    parentId,
     name: input.name,
     code,
     listUrl: input.listUrl,
@@ -193,10 +279,16 @@ export function updateCategory(id: number, input: CategoryPatchInput, replace = 
   if (!listUrl) throw new ValidationError('listUrl 不能为空')
   assertCategoryUnique(siteId, { code, listUrl }, id)
 
+  // PUT 是整体替换：未传 parentId 即视为置顶；PATCH 不传则保持原上级
+  const parentId =
+    input.parentId === undefined ? (replace ? null : (current.parentId ?? null)) : (input.parentId ?? null)
+  if (parentId !== null) assertParentUsable(parentId, siteId, id)
+
   if (input.ruleId) assertRuleInSite(input.ruleId, siteId)
   if (input.proxyId) assertProxyUsable(input.proxyId)
 
   const updated = getModels().category.update(id, {
+    parentId,
     name: input.name ?? current.name,
     code,
     listUrl,
@@ -229,16 +321,24 @@ export function setCategoryEnabled(id: number, enabled: boolean): CategoryDto {
 /**
  * 删除栏目。
  *
- * 存在文章或采集任务时一律拒绝：这两类数据是采集结果，
- * 不做「删栏目顺带删文章」的无提示级联。
+ * 存在子栏目、文章或采集任务时一律拒绝：这些数据都与栏目强关联，
+ * 不做「删栏目顺带删子树 / 删文章」的无提示级联。
  */
 export function deleteCategory(id: number): { id: number } {
   const category = findCategoryOrThrow(id)
   const models = getModels()
 
   const counts = {
+    children: models.category.count({ parentId: id }),
     articles: models.article.count({ categoryId: id }),
     tasks: models.crawlTask.count({ categoryId: id }),
+  }
+
+  if (counts.children > 0) {
+    throw new ConflictError('栏目下还有子栏目，无法删除；请先删除或移走子栏目', {
+      categoryId: id,
+      counts,
+    })
   }
 
   if (counts.articles > 0 || counts.tasks > 0) {

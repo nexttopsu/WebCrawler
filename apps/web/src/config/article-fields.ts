@@ -42,8 +42,7 @@ export const LIST_REQUIRED_FIELD_KEYS: readonly string[] = ['title', 'url']
 /**
  * 详情规则的必填字段。
  *
- * 只标 title：管道本身对「缺少标题」有硬校验，标上必填只是让界面提示更明确。
- * 正文不设必填——不少站点详情页只在列表给摘要，正文靠段落拼接，
- * 强制必填会让这类站点整篇判失败。
+ * 标 title：管道本身对「缺少标题」有硬校验；标 content：内容规则必须能抽到正文，
+ * 抽不到就按失败处理。界面不提供「必填」勾选，由字段 key 自动决定。
  */
-export const DETAIL_REQUIRED_FIELD_KEYS: readonly string[] = ['title']
+export const DETAIL_REQUIRED_FIELD_KEYS: readonly string[] = ['title', 'content']

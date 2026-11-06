@@ -9,10 +9,12 @@ import {
   categoryPatchSchema,
   categoryReplaceSchema,
   categoryStatusSchema,
+  categoryTreeQuerySchema,
   createCategory,
   deleteCategory,
   getCategory,
   listCategories,
+  listCategoryTree,
   setCategoryEnabled,
   updateCategory,
 } from '../services/category-service.js'
@@ -43,6 +45,11 @@ export function categoryRoutes(deps: CategoryRouteDeps): ApiRoute[] {
         setHeader(event, 'location', `/api/categories/${created.id}`)
         return jsonOk(event, created, 201)
       },
+    },
+    {
+      method: 'GET',
+      path: '/api/categories/tree',
+      handler: (event) => jsonOk(event, listCategoryTree(parseQuery(event, categoryTreeQuerySchema))),
     },
     {
       method: 'GET',

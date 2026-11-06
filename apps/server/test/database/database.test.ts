@@ -39,7 +39,7 @@ describe('数据库初始化', () => {
   })
 
   it('执行基线迁移并记录版本', () => {
-    expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(context.migrations.map((item) => item.id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
     expect(context.migrations.map((item) => item.name)).toEqual([
       'initial-indexes',
       'stage3-site-category-rule',
@@ -48,6 +48,7 @@ describe('数据库初始化', () => {
       'article-simplify',
       'single-file-plugins',
       'builtin-plugins',
+      'category-hierarchy',
     ])
   })
 

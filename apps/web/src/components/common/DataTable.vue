@@ -24,6 +24,12 @@ withDefaults(
     selectable?: boolean
     showPagination?: boolean
     stripe?: boolean
+    /** 树表：行内嵌套子节点时指定子节点字段，例如 `{ children: 'children' }` */
+    treeProps?: Record<string, string>
+    /** 树表默认展开全部层级；层级多时建议只展开第一层 */
+    defaultExpandAll?: boolean
+    /** 树表每级缩进像素（默认 16，层级深时建议加大） */
+    treeIndent?: number
   }>(),
   {
     loading: false,
@@ -37,6 +43,9 @@ withDefaults(
     selectable: false,
     showPagination: true,
     stripe: true,
+    treeProps: undefined,
+    defaultExpandAll: false,
+    treeIndent: 16,
   },
 )
 
@@ -81,6 +90,9 @@ function forwardPageSize(value: number): void {
           :data="rows as unknown[]"
           :row-key="rowKey"
           :stripe="stripe"
+          :tree-props="treeProps"
+          :default-expand-all="defaultExpandAll"
+          :indent="treeIndent"
           style="width: 100%"
           @selection-change="(rows: unknown[]) => emit('selection-change', rows)"
         >

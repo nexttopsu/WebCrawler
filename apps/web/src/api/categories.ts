@@ -3,6 +3,7 @@ import type {
   CategoryDto,
   CategorySummaryDto,
   CategoryTestDto,
+  CategoryTreeNodeDto,
   DeleteResultDto,
   PaginatedData,
 } from '@webcrawler/shared'
@@ -18,6 +19,7 @@ export interface CategoryListParams {
 
 export interface CategoryInput {
   siteId: number
+  parentId?: number | null
   name: string
   code?: string | null
   listUrl: string
@@ -31,6 +33,11 @@ export interface CategoryInput {
 
 export function listCategories(params: CategoryListParams = {}): Promise<PaginatedData<CategoryDto>> {
   return api.get<PaginatedData<CategoryDto>>('/categories', params)
+}
+
+/** 栏目树：一次取回全部栏目（可按站点收窄），层级由 `children` 嵌套表达。 */
+export function listCategoryTree(siteId?: number): Promise<CategoryTreeNodeDto[]> {
+  return api.get<CategoryTreeNodeDto[]>('/categories/tree', siteId ? { siteId } : undefined)
 }
 
 export function listSiteCategories(siteId: number): Promise<PaginatedData<CategorySummaryDto>> {

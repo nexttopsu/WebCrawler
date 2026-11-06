@@ -7,6 +7,7 @@ import { parseBody, parseIdParam, parseOptionalBody, parseQuery } from '../lib/v
 import {
   createRule,
   deleteRule,
+  duplicateRule,
   getRule,
   getRuleVersion,
   listRules,
@@ -100,6 +101,16 @@ export function ruleRoutes(deps: RuleRouteDeps): ApiRoute[] {
         const id = parseIdParam(event)
         const { status } = await parseBody(event, ruleStatusSchema)
         return jsonOk(event, setRuleStatus(id, status))
+      },
+    },
+    {
+      // 复制：按当前配置创建一条新规则，名称自动加「副本」后缀
+      method: 'POST',
+      path: '/api/rules/:id/duplicate',
+      handler: (event) => {
+        const copied = duplicateRule(parseIdParam(event))
+        setHeader(event, 'location', `/api/rules/${copied.id}`)
+        return jsonOk(event, copied, 201)
       },
     },
     {

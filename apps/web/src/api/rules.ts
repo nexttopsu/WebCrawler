@@ -56,6 +56,11 @@ export function setRuleStatus(id: number, status: CrawlRuleStatus): Promise<Rule
   return api.patch<RuleDto>(`/rules/${id}/status`, { status })
 }
 
+/** 复制规则：按当前配置创建一条新规则，名称自动加「副本」后缀。 */
+export function duplicateRule(id: number): Promise<RuleDto> {
+  return api.post<RuleDto>(`/rules/${id}/duplicate`)
+}
+
 export function listRuleVersions(id: number): Promise<{ items: RuleVersionDto[] }> {
   return api.get<{ items: RuleVersionDto[] }>(`/rules/${id}/versions`)
 }

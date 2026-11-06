@@ -53,7 +53,7 @@ describe('GET /api/system/info', () => {
     expect(body.success).toBe(true)
     expect(body.data.name).toBe('WebCrawler')
     expect(body.data.runtime.node).toBe(process.version)
-    expect(body.data.database.schemaVersion).toBe(7)
+    expect(body.data.database.schemaVersion).toBe(8)
     expect(body.data.database.models).toHaveLength(12)
     expect(body.data.packages.map((item: { name: string }) => item.name)).toEqual([
       'shared',
@@ -63,12 +63,13 @@ describe('GET /api/system/info', () => {
       'plugin-system',
     ])
     // 插件内置，启动时全部注册
-    expect(body.data.plugins.registered).toBe(4)
+    expect(body.data.plugins.registered).toBe(5)
     expect(body.data.plugins.items.map((item: { id: string }) => item.id)).toEqual([
       'cntc-eyxw-news',
       'demo-fixture',
       'example-flow-news',
       'example-parser-clean',
+      'generic-cover-download',
     ])
     expect(body.data.plugins.items[0].source).toBe('src/plugins/cntc/eyxw-news.ts')
     expect(body.data.verbose).toBeUndefined()

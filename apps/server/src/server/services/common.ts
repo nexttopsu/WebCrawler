@@ -153,6 +153,7 @@ export function toCategoryDto(row: CategoryRow): CategoryDto {
   return {
     id: row.id,
     siteId: row.siteId ?? 0,
+    parentId: row.parentId ?? null,
     name: row.name ?? '',
     code: row.code,
     listUrl: row.listUrl ?? '',

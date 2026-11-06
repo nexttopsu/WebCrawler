@@ -11,3 +11,7 @@ coverage/
 # 本地冒烟产物（截图、临时数据库）
 tmp/
 .workbuddy
+
+# 静态资源目录：内容不入库（采集下载的缩略图等），仅保留 .gitkeep 占位符
+resources/*
+!resources/.gitkeep

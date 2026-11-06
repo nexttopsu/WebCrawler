@@ -1,18 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { CategorySummaryDto, CrawlRuleConfig, RuleDto, RuleSummaryDto, SiteDto } from '@webcrawler/shared'
+import type { CrawlRuleConfig, RuleDto, RuleSummaryDto, SiteDto } from '@webcrawler/shared'
 import { ElMessage } from 'element-plus'
 import { Download, Save, Upload } from '@lucide/vue'
-import {
-  createRule,
-  listCategories,
-  listProxies,
-  listRules,
-  listSites,
-  updateRule,
-  validateRuleConfig,
-  type ProxyItem,
-} from '@/api/tester'
+import { createRule, listProxies, listRules, listSites, updateRule, validateRuleConfig, type ProxyItem } from '@/api/tester'
+import CategorySelect from '@/components/common/CategorySelect.vue'
 
 const props = defineProps<{
   /** 当前配置（与 Rule Schema 同构），保存/校验/导出都用它 */
@@ -31,7 +23,6 @@ const emit = defineEmits<{
 /* ------------------------------ 关联数据 ------------------------------ */
 
 const sites = ref<SiteDto[]>([])
-const categories = ref<CategorySummaryDto[]>([])
 const rules = ref<RuleSummaryDto[]>([])
 const proxies = ref<ProxyItem[]>([])
 
@@ -43,9 +34,6 @@ const saveMode = ref<'create' | 'update'>('create')
 const updateTargetId = ref<number | null>(null)
 const saving = ref(false)
 const validating = ref(false)
-
-/** 站点切换后栏目列表异步加载：先把要回填的栏目记下来，加载完再补上 */
-const pendingCategoryId = ref<number | null>(null)
 
 async function init(): Promise<void> {
   try {
@@ -64,19 +52,13 @@ void init()
 
 watch(siteId, async (value) => {
   rules.value = []
-  categories.value = []
+  // 栏目选项由 CategorySelect 共享的全量树提供，这里只清掉跨站点的旧选择
   categoryId.value = null
   if (!value) return
   try {
-    const [categoryPage, rulePage] = await Promise.all([listCategories(value), listRules(value)])
-    categories.value = categoryPage.items
-    rules.value = rulePage.items
+    rules.value = (await listRules(value)).items
   } catch {
-    ElMessage.warning('加载栏目/规则列表失败')
-  }
-  if (pendingCategoryId.value != null) {
-    categoryId.value = pendingCategoryId.value
-    pendingCategoryId.value = null
+    ElMessage.warning('加载规则列表失败')
   }
 })
 
@@ -90,11 +72,10 @@ function applyLinkedRule(rule: RuleDto | null): void {
   saveMode.value = 'update'
   updateTargetId.value = rule.id
   if (siteId.value === rule.siteId) {
-    pendingCategoryId.value = null
     categoryId.value = rule.categoryId
   } else {
-    pendingCategoryId.value = rule.categoryId
     siteId.value = rule.siteId
+    categoryId.value = rule.categoryId
   }
 }
 
@@ -226,9 +207,7 @@ function importJson(event: Event): void {
       </label>
       <label>
         <span>绑定栏目（可选）</span>
-        <el-select v-model="categoryId" placeholder="不关联" clearable :disabled="!siteId">
-          <el-option v-for="category in categories" :key="category.id" :value="category.id" :label="category.name" />
-        </el-select>
+        <CategorySelect v-model="categoryId" :site-id="siteId" placeholder="不关联" :disabled="!siteId" />
       </label>
     </div>
 

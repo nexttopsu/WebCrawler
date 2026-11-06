@@ -11,6 +11,8 @@ const props = withDefaults(
     cancelText?: string
     danger?: boolean
     loading?: boolean
+    /** 只提示不动作：前置校验已判定无法继续时置灰确认按钮 */
+    confirmDisabled?: boolean
     width?: number
   }>(),
   {
@@ -20,6 +22,7 @@ const props = withDefaults(
     cancelText: '取消',
     danger: false,
     loading: false,
+    confirmDisabled: false,
     width: 420,
   },
 )
@@ -52,7 +55,7 @@ function cancel(): void {
 
     <template #footer>
       <el-button :disabled="loading" @click="cancel">{{ cancelText }}</el-button>
-      <el-button :type="danger ? 'danger' : 'primary'" :loading="loading" @click="emit('confirm')">
+      <el-button :type="danger ? 'danger' : 'primary'" :loading="loading" :disabled="confirmDisabled" @click="emit('confirm')">
         {{ confirmText }}
       </el-button>
     </template>

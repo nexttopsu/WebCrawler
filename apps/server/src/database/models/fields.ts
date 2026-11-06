@@ -32,9 +32,15 @@ export type SiteFields = typeof siteFields
 export type SiteRow = ModelRow<SiteFields>
 export const SITE_TABLE = 'site'
 
-/** 栏目。`enabled` 用 INTEGER 存 0/1，对外映射为布尔值。 */
+/**
+ * 栏目。`enabled` 用 INTEGER 存 0/1，对外映射为布尔值。
+ *
+ * `parentId` 为空表示顶级栏目。层级只影响组织与展示：父栏目同样是
+ * 可采集的真实栏目（有自己的列表页），不是分组容器。
+ */
 export const categoryFields = {
   siteId: 'INTEGER',
+  parentId: 'INTEGER',
   name: 'TEXT',
   code: 'TEXT',
   listUrl: 'TEXT',

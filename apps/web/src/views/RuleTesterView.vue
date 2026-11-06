@@ -91,7 +91,7 @@ async function loadLinkedRule(): Promise<void> {
       const category = page?.items.find((item) => item.id === detail.categoryId)
       if (category?.listUrl) draft.value.url = category.listUrl
     }
-    ElMessage.success(`已载入规则「${detail.name}」v${detail.version}，可直接测试并保存`)
+    // ElMessage.success(`已载入规则「${detail.name}」v${detail.version}，可直接测试并保存`)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '载入规则失败')
   } finally {
@@ -353,11 +353,11 @@ async function loadDetailSnapshot(): Promise<void> {
   }
 }
 
-const enabledFieldCount = computed(() => draft.value.fields.filter((field) => field.enabled).length)
+const detailFieldCount = computed(() => draft.value.fields.length)
 
 /** 详情页签标题：插件接管时不再显示字段数量。 */
 const detailTabLabel = computed(() =>
-  hasDetailPlugin.value ? '详情规则（插件）' : `详情规则（${enabledFieldCount.value}）`,
+  hasDetailPlugin.value ? '详情规则（插件）' : `详情规则（${detailFieldCount.value}）`,
 )
 
 async function runDetailTest(): Promise<void> {
@@ -367,7 +367,7 @@ async function runDetailTest(): Promise<void> {
     return
   }
   const pluginId = trimmed(draft.value.detailPlugin)
-  if (!pluginId && enabledFieldCount.value === 0) {
+  if (!pluginId && detailFieldCount.value === 0) {
     ElMessage.warning('请选择详情插件，或至少启用一个字段')
     return
   }
@@ -399,21 +399,27 @@ async function runDetailTest(): Promise<void> {
   }
 }
 
-/** 草稿字段 → Rule Schema 的 FieldRule（第三阶段格式，不另造格式）。 */
-function draftFieldsToRuleFields(source: TesterFieldDraft[]): Record<string, FieldRule> {
+/**
+ * 草稿字段 → Rule Schema 的 FieldRule（第三阶段格式，不另造格式）。
+ *
+ * 必填不再由界面勾选：`requiredKeys` 里的字段（列表 title / url、详情 title / content）
+ * 一律写入 `required: true`，避免漏标导致采集时空值静默入库。
+ */
+function draftFieldsToRuleFields(
+  source: TesterFieldDraft[],
+  requiredKeys: readonly string[] = [],
+): Record<string, FieldRule> {
   const output: Record<string, FieldRule> = {}
   for (const field of source) {
-    if (!field.enabled) continue
     if (!field.selector.trim() && !field.defaultValue.trim()) continue
     const clean: FieldCleanRule = {}
-    if (field.trim) clean.trim = true
     if (field.collapseWhitespace) clean.collapseWhitespace = true
-    output[field.key.trim()] = {
+    const key = field.key.trim()
+    output[key] = {
       type: field.type,
       ...(field.selector.trim() ? { selector: field.selector.trim() } : {}),
       ...(field.type === 'attr' && field.attribute.trim() ? { attribute: field.attribute.trim() } : {}),
-      ...(field.multiple ? { multiple: true } : {}),
-      ...(field.required ? { required: true } : {}),
+      ...((field.required || requiredKeys.includes(key)) ? { required: true } : {}),
       ...(field.defaultValue.trim() ? { defaultValue: field.defaultValue } : {}),
       ...(Object.keys(clean).length > 0 ? { clean } : {}),
     }
@@ -422,12 +428,12 @@ function draftFieldsToRuleFields(source: TesterFieldDraft[]): Record<string, Fie
 }
 
 function fieldsToRuleFields(): Record<string, FieldRule> {
-  return draftFieldsToRuleFields(draft.value.fields)
+  return draftFieldsToRuleFields(draft.value.fields, DETAIL_REQUIRED_FIELD_KEYS)
 }
 
-/** 列表字段配置 → FieldRule（title / url 必填由面板勾选「必填」表达）。 */
+/** 列表字段配置 → FieldRule（title / url 必填由字段 key 自动决定）。 */
 function listFieldsToRuleFields(): Record<string, FieldRule> {
-  return draftFieldsToRuleFields(draft.value.list.listFields)
+  return draftFieldsToRuleFields(draft.value.list.listFields, LIST_REQUIRED_FIELD_KEYS)
 }
 
 /* ------------------------------ 分页（仅已实现的方式） ------------------------------ */
@@ -518,7 +524,6 @@ const ruleConfig = computed<CrawlRuleConfig | null>(() => {
   if (!detailPlugin && draft.value.parserPlugins.length > 0) {
     config.parserPlugins = [...draft.value.parserPlugins]
   }
-  if (draft.value.collectScope === 'list') config.collectScope = 'list'
   return config
 })
 
@@ -533,7 +538,6 @@ function onImported(config: CrawlRuleConfig): void {
   const { mode: _mode, ...restRequest } = config.request ?? {}
   requestExtras.value = restRequest as RuleRequestConfig
   listUrlExtra.value = typeof config.list?.url === 'string' ? config.list.url : ''
-  draft.value.collectScope = config.collectScope === 'list' ? 'list' : 'full'
   draft.value.list.plugin = config.list?.plugin ?? ''
   draft.value.detailPlugin = config.detail?.plugin ?? ''
   draft.value.list.itemSelector = config.list?.itemSelector ?? ''
@@ -598,10 +602,8 @@ function toFieldDraft(key: string, rule: FieldRule): TesterFieldDraft {
     selector: typeof rule.selector === 'string' ? rule.selector : '',
     type: (rule.type === 'html' || rule.type === 'attr' ? rule.type : 'text') as TesterFieldDraft['type'],
     attribute: typeof rule.attribute === 'string' ? rule.attribute : '',
-    multiple: rule.multiple === true,
     required: rule.required === true,
     defaultValue: typeof rule.defaultValue === 'string' ? rule.defaultValue : '',
-    trim: rule.clean?.trim !== false,
     collapseWhitespace: rule.clean?.collapseWhitespace === true,
     enabled: true,
   }
@@ -696,17 +698,6 @@ const requestInfo = computed(() => {
       <div class="divider" @mousedown="startLeftDivider" />
 
       <section class="pane pane-config">
-        <div class="scope-row">
-          <span class="scope-label">采集范围</span>
-          <el-radio-group v-model="draft.collectScope">
-            <el-radio-button value="full">列表 + 详情</el-radio-button>
-            <el-radio-button value="list">仅列表</el-radio-button>
-          </el-radio-group>
-          <span class="scope-hint">
-            {{ draft.collectScope === 'list' ? '只入库列表项（标题 + 链接），正文稍后单篇 / 批量补采' : '列表与正文一次采完' }}
-          </span>
-        </div>
-
         <el-tabs v-model="middleTab" class="config-tabs">
           <!-- 列表规则：选择器 → 字段 → 测试 → 高级 -->
           <el-tab-pane label="列表规则" name="list">
@@ -847,7 +838,7 @@ const requestInfo = computed(() => {
               v-model:fields="draft.fields"
               class="stack-section"
               title="字段配置"
-              subtitle="与列表规则共用同一套内置字段；保存后可直接被采集引擎执行"
+              subtitle="title 与 content 必填；与列表规则共用同一套内置字段，自定义字段随文章入库存入 extra"
               :built-ins="ARTICLE_FIELD_PRESETS"
               :required-keys="DETAIL_REQUIRED_FIELD_KEYS"
             />
@@ -855,7 +846,7 @@ const requestInfo = computed(() => {
             <DetailResultPanel
               :result="detailResult"
               :testing="detailTesting"
-              :has-fields="enabledFieldCount > 0"
+              :has-fields="detailFieldCount > 0"
               :plugin-mode="hasDetailPlugin"
               class="stack-section"
               @test="runDetailTest"

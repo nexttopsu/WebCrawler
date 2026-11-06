@@ -9,7 +9,7 @@ import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CloudDownload, Download, Eye, FileJson, FileSpreadsheet, RefreshCw, Trash2 } from '@lucide/vue'
-import type { ArticleSummaryDto, CategoryDto, SiteDto } from '@webcrawler/shared'
+import type { ArticleSummaryDto, SiteDto } from '@webcrawler/shared'
 import {
   collectArticleDetail,
   deleteArticle,
@@ -19,14 +19,15 @@ import {
   type CollectDetailParams,
 } from '@/api/articles'
 import { listSites } from '@/api/sites'
-import { listCategories } from '@/api/categories'
 import { errorMessage } from '@/api/client'
 import { useListQuery } from '@/composables/useListQuery'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SearchBar from '@/components/common/SearchBar.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import CategorySelect from '@/components/common/CategorySelect.vue'
 
 const router = useRouter()
 
@@ -57,9 +58,9 @@ const list = useListQuery<
 )
 
 const siteOptions = ref<SiteDto[]>([])
-const categoryOptions = ref<CategoryDto[]>([])
 const siteNameMap = computed(() => new Map(siteOptions.value.map((site) => [site.id, site.name])))
-const categoryNameMap = computed(() => new Map(categoryOptions.value.map((item) => [item.id, item.name])))
+/** 栏目 id → 完整层级路径（「剧院动态 / 儿艺新闻」），表格归属列与筛选共用一份全量树。 */
+const { pathMap: categoryPathMap, load: loadCategoryTree } = useCategoryTree()
 
 async function loadSiteOptions(): Promise<void> {
   try {
@@ -70,20 +71,11 @@ async function loadSiteOptions(): Promise<void> {
   }
 }
 
-async function loadCategoryOptions(siteId?: number): Promise<void> {
-  try {
-    const page = await listCategories({ siteId, pageSize: 100 })
-    categoryOptions.value = page.items
-  } catch {
-    categoryOptions.value = []
-  }
-}
-
 watch(
   () => list.filters.siteId,
-  (siteId) => {
+  () => {
+    // 切换站点后原栏目归属失效，清掉筛选；选项由 CategorySelect 自己按站点过滤
     list.filters.categoryId = undefined
-    void loadCategoryOptions(siteId || undefined)
   },
 )
 
@@ -246,7 +238,7 @@ function formatTime(value: string | null): string {
 }
 
 void loadSiteOptions()
-void loadCategoryOptions()
+void loadCategoryTree()
 </script>
 
 <template>
@@ -306,16 +298,13 @@ void loadCategoryOptions()
       >
         <el-option v-for="site in siteOptions" :key="site.id" :label="site.name" :value="site.id" />
       </el-select>
-      <el-select
+      <CategorySelect
         v-model="list.filters.categoryId"
+        :site-id="list.filters.siteId || null"
         placeholder="全部栏目"
-        clearable
-        filterable
-        style="width: 160px"
-        @change="list.search()"
-      >
-        <el-option v-for="item in categoryOptions" :key="item.id" :label="item.name" :value="item.id" />
-      </el-select>
+        width="180px"
+        @update:model-value="list.search()"
+      />
       <el-select
         v-model="list.filters.detailStatus"
         placeholder="详情状态"
@@ -370,7 +359,7 @@ void loadCategoryOptions()
           <div class="cell-main">
             <span>{{ siteNameMap.get(row.siteId) ?? `站点 #${row.siteId}` }}</span>
             <span class="wb-muted cell-sub">
-              {{ row.categoryId ? (categoryNameMap.get(row.categoryId) ?? `栏目 #${row.categoryId}`) : '—' }}
+              {{ row.categoryId ? (categoryPathMap.get(row.categoryId) ?? `栏目 #${row.categoryId}`) : '—' }}
             </span>
           </div>
         </template>

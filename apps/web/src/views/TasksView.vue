@@ -7,7 +7,7 @@
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, type FormInstance } from 'element-plus'
 import {
   Ban,
   CirclePause,
@@ -19,7 +19,6 @@ import {
   Trash2,
 } from '@lucide/vue'
 import type {
-  CategoryDto,
   CrawlTaskStatus,
   CrawlTaskType,
   SiteDto,
@@ -35,9 +34,9 @@ import {
   retryTask,
 } from '@/api/tasks'
 import { listSites } from '@/api/sites'
-import { listCategories } from '@/api/categories'
 import { errorMessage } from '@/api/client'
 import { useListQuery } from '@/composables/useListQuery'
+import { useCategoryTree } from '@/composables/useCategoryTree'
 import { usePolling } from '@/composables/usePolling'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SearchBar from '@/components/common/SearchBar.vue'
@@ -46,11 +45,9 @@ import DataTable from '@/components/common/DataTable.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
 import FormDialog from '@/components/common/FormDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import CategorySelect from '@/components/common/CategorySelect.vue'
 
 const router = useRouter()
-
-/** 模板里不能出现 `://`，统一从脚本传占位文案。 */
-const URLS_HINT = '每行一个地址，需以 http:// 或 https:// 开头'
 
 const TASK_TYPE_LABEL: Record<CrawlTaskType, string> = {
   site: '全站',
@@ -109,80 +106,36 @@ onMounted(async () => {
 const dialogVisible = ref(false)
 const submitting = ref(false)
 const formRef = ref<FormInstance>()
-const categoryOptions = ref<CategoryDto[]>([])
+const { categorySiteMap } = useCategoryTree()
 
 const form = reactive({
-  siteId: null as number | null,
-  type: 'category' as CrawlTaskType,
   categoryIds: [] as number[],
-  urlsText: '',
   name: '',
   startPage: 1,
   endPage: 0,
   retries: 2,
   rateLimitMs: 100,
-  publishedAfter: '',
   incremental: false,
-  followPagination: true,
-  /** 采集范围：空串表示跟随规则默认值 */
-  collectScope: '' as '' | 'list' | 'full',
+  /** 采集范围：仅列表 / 列表 + 详情 */
+  collectScope: 'list' as 'full' | 'list',
 })
 
-const formRules: FormRules = {
-  siteId: [{ required: true, message: '请选择所属网站', trigger: 'change' }],
-  type: [{ required: true, message: '请选择任务类型', trigger: 'change' }],
-}
-
-const needCategories = computed(() => form.type === 'category' || form.type === 'batch')
-const needUrls = computed(() => form.type === 'urls')
-/** 采集范围只对「列表 + 详情」类任务有意义；list / detail / urls 自带语义。 */
-const scopeApplies = computed(() =>
-  ['site', 'category', 'batch', 'full', 'incremental'].includes(form.type),
-)
-/** 服务端要求所有类型都带 siteId：urls 类型靠站点默认规则解析正文。 */
-const needSite = computed(() => true)
-
-const parsedUrls = computed(() =>
-  form.urlsText
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0),
-)
-
-const invalidUrls = computed(() => parsedUrls.value.filter((url) => !/^https?:\/\//i.test(url)))
-
-watch(
-  () => form.siteId,
-  async (siteId) => {
-    form.categoryIds = []
-    if (!siteId) {
-      categoryOptions.value = []
-      return
-    }
-    try {
-      const page = await listCategories({ siteId, pageSize: 100, enabled: 'true' })
-      categoryOptions.value = page.items
-    } catch {
-      categoryOptions.value = []
-    }
-  },
-)
+/** 选中栏目后锁定到该站点：选择器只列同站栏目，siteId 也由栏目反推。 */
+const selectedSiteId = computed(() => {
+  const first = form.categoryIds[0]
+  return first !== undefined ? (categorySiteMap.value.get(first) ?? null) : null
+})
 
 function openCreate(): void {
   Object.assign(form, {
-    siteId: list.filters.siteId ?? null,
-    type: 'category',
     categoryIds: [],
-    urlsText: '',
     name: '',
     startPage: 1,
     endPage: 0,
     retries: 2,
     rateLimitMs: 100,
-    publishedAfter: '',
     incremental: false,
-    followPagination: true,
-    collectScope: '',
+    collectScope: 'list',
   })
   dialogVisible.value = true
 }
@@ -191,47 +144,37 @@ async function submit(): Promise<void> {
   const valid = await formRef.value?.validate().catch(() => false)
   if (!valid) return
 
-  if (needCategories.value && form.categoryIds.length === 0) {
+  if (form.categoryIds.length === 0) {
     ElMessage.warning('请至少选择一个栏目')
     return
   }
-  if (needUrls.value) {
-    if (parsedUrls.value.length === 0) {
-      ElMessage.warning('请至少填写一个 URL')
-      return
-    }
-    if (invalidUrls.value.length > 0) {
-      ElMessage.warning(`有 ${invalidUrls.value.length} 个地址不是 http(s) 开头`)
-      return
-    }
+  const siteId = selectedSiteId.value
+  if (!siteId) {
+    ElMessage.warning('无法确定所选栏目的所属网站，请重新选择')
+    return
   }
-  if (needSite.value && !form.siteId) return
   if (form.endPage > 0 && form.endPage < form.startPage) {
     ElMessage.warning('结束分页不能小于开始分页')
     return
   }
 
   const options: Record<string, unknown> = {
-    followPagination: form.followPagination,
     retries: form.retries,
+    collectScope: form.collectScope,
   }
   if (form.startPage > 1) options.startPage = form.startPage
   if (form.endPage > 0) options.endPage = form.endPage
   if (form.rateLimitMs > 0) options.rateLimitMs = form.rateLimitMs
-  if (form.publishedAfter) options.publishedAfter = new Date(form.publishedAfter).toISOString()
-  if (form.type === 'incremental') options.incremental = true
-  else if (form.incremental) options.incremental = true
-  // 留空表示跟随规则里的 collectScope，不写进任务选项
-  if (scopeApplies.value && form.collectScope) options.collectScope = form.collectScope
+  if (form.incremental) options.incremental = true
 
   submitting.value = true
   try {
+    // 单选是「单栏目」任务，多选自动升级为「批量栏目」任务
     const task = await createTask({
       name: form.name.trim() || undefined,
-      siteId: needSite.value ? Number(form.siteId) : 0,
-      type: form.type,
-      categoryIds: form.categoryIds.length > 0 ? form.categoryIds : undefined,
-      urls: needUrls.value ? parsedUrls.value : undefined,
+      siteId,
+      type: form.categoryIds.length > 1 ? 'batch' : 'category',
+      categoryIds: form.categoryIds,
       options,
     })
     ElMessage.success(`任务 #${task.id} 已创建`)
@@ -478,96 +421,35 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
       description="任务创建后立即排队执行，执行依据是创建时固化的规则快照，之后修改规则不影响它。"
       @submit="submit"
     >
-      <el-form ref="formRef" :model="form" :rules="formRules" label-width="92px">
-        <el-form-item label="任务类型" prop="type">
-          <el-radio-group v-model="form.type">
-            <el-radio-button value="category">单栏目</el-radio-button>
-            <el-radio-button value="batch">批量栏目</el-radio-button>
-            <el-radio-button value="urls">指定 URL</el-radio-button>
-            <el-radio-button value="site">全站</el-radio-button>
-            <el-radio-button value="full">全量</el-radio-button>
-            <el-radio-button value="incremental">增量</el-radio-button>
-            <el-radio-button value="list">仅列表</el-radio-button>
-            <el-radio-button value="detail">详情补采</el-radio-button>
-          </el-radio-group>
-          <p v-if="form.type === 'list' || form.type === 'detail'" class="form-hint">
-            {{
-              form.type === 'list'
-                ? '仅抓取列表页并入库（标题 + 链接），文章详情状态记为「待采集」，详情由「详情补采」任务单独抓取。'
-                : '只处理详情状态为「待采集」或「失败」的文章，逐篇抓取详情页；同名字段有值才覆盖列表阶段的数据。'
-            }}
-          </p>
-        </el-form-item>
-
-        <el-form-item v-if="scopeApplies" label="采集范围">
+      <el-form ref="formRef" :model="form" label-width="92px">
+        <el-form-item label="采集范围">
           <el-radio-group v-model="form.collectScope">
-            <el-radio-button value="">跟随规则</el-radio-button>
-            <el-radio-button value="full">列表 + 详情</el-radio-button>
             <el-radio-button value="list">仅列表</el-radio-button>
+            <el-radio-button value="full">列表 + 详情</el-radio-button>
           </el-radio-group>
           <p class="form-hint">
             {{
               form.collectScope === 'list'
                 ? '只抓列表页并入库（标题 + 链接），文章详情状态记为「详情待采」，之后可在文章页单篇或批量补采。'
-                : '「跟随规则」使用规则里配置的采集范围；规则没设置时按「列表 + 详情」执行。'
+                : '抓取列表页后逐篇采集文章详情。'
             }}
           </p>
         </el-form-item>
 
-        <el-form-item v-if="needSite" label="所属网站" prop="siteId">
-          <el-select v-model="form.siteId" filterable placeholder="选择网站" style="width: 100%">
-            <el-option
-              v-for="site in siteOptions"
-              :key="site.id"
-              :label="`${site.name} (${site.domain})`"
-              :value="site.id"
-            />
-          </el-select>
-        </el-form-item>
-
-        <el-form-item v-if="needCategories" :label="form.type === 'batch' ? '选择栏目' : '选择栏目'">
-          <el-select
+        <el-form-item
+          label="所属栏目"
+          :rules="[{ required: true, message: '请选择要采集的栏目' }]"
+          prop="categoryIds"
+        >
+          <CategorySelect
             v-model="form.categoryIds"
+            :site-id="selectedSiteId"
             multiple
-            filterable
-            :multiple-limit="form.type === 'category' ? 1 : 0"
-            :placeholder="form.siteId ? '选择要采集的栏目' : '请先选择网站'"
-            :disabled="!form.siteId"
-            style="width: 100%"
-          >
-            <el-option v-for="item in categoryOptions" :key="item.id" :label="item.name" :value="item.id" />
-          </el-select>
-          <p v-if="form.siteId && categoryOptions.length === 0" class="form-hint">
-            该网站下还没有启用的栏目，请先到栏目管理中创建。
-          </p>
-        </el-form-item>
-
-        <el-form-item v-if="needUrls" label="URL 列表">
-          <el-input
-            v-model="form.urlsText"
-            type="textarea"
-            :rows="5"
-            :placeholder="URLS_HINT"
+            only-enabled
+            placeholder="选择要采集的栏目，可多选"
+            no-data-text="还没有启用的栏目，请先到栏目管理中创建"
           />
-          <p class="form-hint">
-            已填写 {{ parsedUrls.length }} 个地址
-            <span v-if="invalidUrls.length" class="form-hint__warn">，其中 {{ invalidUrls.length }} 个格式不正确</span>
-          </p>
-        </el-form-item>
-
-        <el-form-item v-if="needUrls" label="关联栏目">
-          <el-select
-            v-model="form.categoryIds"
-            multiple
-            :multiple-limit="1"
-            filterable
-            :placeholder="form.siteId ? '可选，用于提供规则与代理' : '请先选择网站'"
-            :disabled="!form.siteId"
-            style="width: 100%"
-          >
-            <el-option v-for="item in categoryOptions" :key="item.id" :label="item.name" :value="item.id" />
-          </el-select>
-          <p class="form-hint">留空时使用站点默认规则解析正文。</p>
+          <p class="form-hint">选定栏目后即确定网站归属，之后只能选同一网站下的栏目；多选会按顺序依次采集。</p>
         </el-form-item>
 
         <el-form-item label="任务名称">
@@ -599,17 +481,7 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
               </label>
             </div>
 
-            <el-form-item label="文章时间下限" label-width="110px" class="option-date">
-              <el-date-picker
-                v-model="form.publishedAfter"
-                type="datetime"
-                placeholder="只采集文章时间（原站点发布时间）在该时刻之后的文章"
-                style="width: 100%"
-              />
-            </el-form-item>
-
             <div class="option-switches">
-              <el-checkbox v-model="form.followPagination">按规则翻页</el-checkbox>
               <el-checkbox v-model="form.incremental">跳过已采集 URL</el-checkbox>
             </div>
           </el-collapse-item>
@@ -683,10 +555,6 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
   color: var(--wb-text-muted);
 }
 
-.form-hint__warn {
-  color: var(--wb-warning);
-}
-
 .form-advanced {
   margin-top: 4px;
   border-top: 1px solid var(--wb-border);
@@ -710,10 +578,6 @@ function progressStatus(status: CrawlTaskStatus): '' | 'success' | 'exception' |
 .option-item small {
   font-size: 11.5px;
   color: var(--wb-text-muted);
-}
-
-.option-date {
-  margin-top: 8px;
 }
 
 .option-switches {

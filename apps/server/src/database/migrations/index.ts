@@ -6,6 +6,7 @@ import { migration004ArticleDetailStatus } from './004-article-detail-status.js'
 import { migration005ArticleSimplify } from './005-article-simplify.js'
 import { migration006SingleFilePlugins } from './006-single-file-plugins.js'
 import { migration007BuiltinPlugins } from './007-builtin-plugins.js'
+import { migration008CategoryHierarchy } from './008-category-hierarchy.js'
 import type { AppliedMigration, Migration } from './types.js'
 
 export type { AppliedMigration, Migration } from './types.js'
@@ -21,6 +22,7 @@ export const migrations: readonly Migration[] = [
   migration005ArticleSimplify,
   migration006SingleFilePlugins,
   migration007BuiltinPlugins,
+  migration008CategoryHierarchy,
 ]
 
 const CREATE_MIGRATIONS_TABLE = `

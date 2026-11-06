@@ -231,12 +231,14 @@ pnpm --filter @webcrawler/core demo:crawl
 | POST | `/api/sites/:id/test` | 连接测试：发一次 GET，返回状态码、耗时与 `<title>` |
 | GET | `/api/sites/:id/categories` | 该站点下的栏目 |
 | GET / POST | `/api/categories` | 栏目列表（`siteId`/`keyword`/`enabled`）/ 新建 |
+| GET | `/api/categories/tree` | 栏目树（按 `parentId` 嵌套，支持任意层级；`siteId` 可选） |
 | GET / PUT / PATCH / DELETE | `/api/categories/:id` | 详情、替换、更新、删除 |
 | PATCH | `/api/categories/:id/status` | 启用 / 停用 |
 | POST | `/api/categories/:id/test` | 栏目试采：走生效规则抓一次列表 |
 | GET / POST | `/api/rules` | 规则列表（`siteId`/`categoryId`/`status`/`scope`/`keyword`）/ 新建（同时写入 v1 快照） |
 | GET / PUT / PATCH / DELETE | `/api/rules/:id` | 详情、替换、更新、删除 |
 | PATCH | `/api/rules/:id/status` | 启用 / 停用 |
+| POST | `/api/rules/:id/duplicate` | 复制规则：按当前配置建一条新规则，名称自动加「副本」后缀并保证站点内唯一，版本线从 v1 重新开始 |
 | POST | `/api/rules/resolve` | 解析生效规则（站点默认 → 栏目 → 任务覆盖），返回合并结果与来源 |
 | GET | `/api/rules/:id/versions` | 版本列表（新 → 旧） |
 | GET | `/api/rules/:id/versions/:version` | 指定版本快照 |
@@ -546,7 +548,7 @@ ORMlet 只接受 `TEXT` / `INTEGER` / `REAL` / `BLOB`，不支持 `NOT NULL`、`
 | --- | --- | --- |
 | `/` | 仪表盘 | 网站/栏目/文章总数、今日采集、执行中任务、近 30 天成功率、代理可用、14 天趋势图（ECharts）、最近任务、最近错误 |
 | `/sites` | 网站管理 | 列表 / 新增 / 编辑 / 删除 / 测试连接 / 启停 / 搜索筛选 / 跳转栏目管理（域名不手填，由站点地址自动获取） |
-| `/categories` | 栏目管理 | 列表 / 新增 / 编辑 / 删除 / 网站筛选 / 规则与代理绑定 / 启停 / 单栏目采集 / 批量采集 / 试采 |
+| `/categories` | 栏目管理 | 树形列表（任意层级，父栏目只表示归属、采集互不包含）/ 同级排序 / 新增 / 新增子栏目 / 编辑 / 复制（带入规则、代理等配置）/ 删除 / 网站筛选 / 规则与代理绑定 / 启停 / 单栏目采集 / 批量采集 / 试采 |
 | `/rules` | 采集规则 | 列表 / 新建 / 编辑（只填网站、栏目、名称、描述、采集范围与规则 JSON）/ 复制 / 删除 / 导入 JSON / 导出 JSON / 版本时间线 / 「保存并测试」跳转测试器 |
 | `/tester` | 规则测试器 | 三栏可拖动：页面加载、HTTP / Browser 切换、代理选择、DOM 快照、悬停高亮、点选生成 Selector、列表与详情测试、采集范围切换、保存规则（带 ruleId 时回写同一条规则） |
 | `/tasks` | 采集任务 | 列表 / 新建（5 种类型）/ 暂停 / 恢复 / 取消 / 重试 / 删除 / 列表自动刷新 |

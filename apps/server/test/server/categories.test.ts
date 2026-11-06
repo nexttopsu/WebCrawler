@@ -312,3 +312,242 @@ describe('栏目规则测试', () => {
     expect(response.body.error.message).toContain('itemSelector')
   })
 })
+
+describe('栏目层级', () => {
+  it('支持任意层级，并按树返回', async () => {
+    const site = await createSite(app, { name: '层级站', domain: domain('tree') })
+    const root = await createCategory(app, {
+      siteId: site.id,
+      name: '要闻',
+      listUrl: `https://${site.domain}/yw`,
+    })
+    const child = await createCategory(app, {
+      siteId: site.id,
+      name: '国内',
+      listUrl: `https://${site.domain}/gn`,
+      parentId: root.id,
+    })
+    const grandchild = await createCategory(app, {
+      siteId: site.id,
+      name: '时政',
+      listUrl: `https://${site.domain}/sz`,
+      parentId: child.id,
+    })
+
+    expect(root.parentId).toBeNull()
+    expect(child.parentId).toBe(root.id)
+    expect(grandchild.parentId).toBe(child.id)
+
+    const response = await call(app, `/api/categories/tree?siteId=${site.id}`)
+    expect(response.status).toBe(200)
+    const tree = response.body.data as Array<Record<string, any>>
+    expect(tree).toHaveLength(1)
+    expect(tree[0]).toMatchObject({ id: root.id, name: '要闻' })
+    expect(tree[0]!.children).toHaveLength(1)
+    expect(tree[0]!.children[0]).toMatchObject({ id: child.id, parentId: root.id })
+    expect(tree[0]!.children[0].children[0]).toMatchObject({ id: grandchild.id, parentId: child.id })
+  })
+
+  it('子栏目可以独立调整上级或置顶', async () => {
+    const site = await createSite(app, { name: '移动站', domain: domain('move') })
+    const a = await createCategory(app, { siteId: site.id, name: 'A', listUrl: `https://${site.domain}/a` })
+    const b = await createCategory(app, { siteId: site.id, name: 'B', listUrl: `https://${site.domain}/b` })
+    const leaf = await createCategory(app, {
+      siteId: site.id,
+      name: '叶',
+      listUrl: `https://${site.domain}/leaf`,
+      parentId: a.id,
+    })
+
+    const moved = await call(app, `/api/categories/${leaf.id}`, {
+      ...json({ parentId: b.id }, 'PATCH'),
+    })
+    expect(moved.status).toBe(200)
+    expect(moved.body.data.parentId).toBe(b.id)
+
+    const detach = await call(app, `/api/categories/${leaf.id}`, {
+      ...json({ parentId: null }, 'PATCH'),
+    })
+    expect(detach.status).toBe(200)
+    expect(detach.body.data.parentId).toBeNull()
+  })
+
+  it('上级栏目必须属于同一站点', async () => {
+    const siteA = await createSite(app, { name: '层级 A', domain: domain('ha') })
+    const siteB = await createSite(app, { name: '层级 B', domain: domain('hb') })
+    const parent = await createCategory(app, {
+      siteId: siteA.id,
+      name: 'A 的栏目',
+      listUrl: `https://${siteA.domain}/a`,
+    })
+
+    const response = await call(
+      app,
+      '/api/categories',
+      json({
+        siteId: siteB.id,
+        parentId: parent.id,
+        name: '跨站点子栏目',
+        listUrl: `https://${siteB.domain}/b`,
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.details[0].path).toBe('parentId')
+  })
+
+  it('上级栏目不存在时返回 400 并定位到 parentId', async () => {
+    const site = await createSite(app, { name: '缺失上级站', domain: domain('miss') })
+
+    const response = await call(
+      app,
+      '/api/categories',
+      json({
+        siteId: site.id,
+        parentId: 999999,
+        name: '孤儿栏目',
+        listUrl: `https://${site.domain}/orphan`,
+      }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.details[0].path).toBe('parentId')
+  })
+
+  it('不能形成循环层级', async () => {
+    const site = await createSite(app, { name: '循环站', domain: domain('cycle') })
+    const root = await createCategory(app, {
+      siteId: site.id,
+      name: '根',
+      listUrl: `https://${site.domain}/root`,
+    })
+    const mid = await createCategory(app, {
+      siteId: site.id,
+      name: '中',
+      listUrl: `https://${site.domain}/mid`,
+      parentId: root.id,
+    })
+
+    const self = await call(app, `/api/categories/${root.id}`, {
+      ...json({ parentId: root.id }, 'PATCH'),
+    })
+    expect(self.status).toBe(400)
+    expect(self.body.error.details[0].path).toBe('parentId')
+
+    const loop = await call(app, `/api/categories/${root.id}`, {
+      ...json({ parentId: mid.id }, 'PATCH'),
+    })
+    expect(loop.status).toBe(400)
+    expect(loop.body.error.details[0].path).toBe('parentId')
+  })
+
+  it('存在子栏目时不允许删除', async () => {
+    const site = await createSite(app, { name: '删除站', domain: domain('del') })
+    const root = await createCategory(app, {
+      siteId: site.id,
+      name: '父',
+      listUrl: `https://${site.domain}/p`,
+    })
+    await createCategory(app, {
+      siteId: site.id,
+      name: '子',
+      listUrl: `https://${site.domain}/c`,
+      parentId: root.id,
+    })
+
+    const response = await call(app, `/api/categories/${root.id}`, { method: 'DELETE' })
+    expect(response.status).toBe(409)
+    expect(response.body.error.details.counts.children).toBe(1)
+  })
+})
+
+describe('栏目树排序与站点过滤', () => {
+  it('同级栏目按 sortOrder 升序，调整后即时生效', async () => {
+    const site = await createSite(app, { name: '排序站', domain: domain('sort') })
+    const late = await createCategory(app, {
+      siteId: site.id,
+      name: '排后',
+      listUrl: `https://${site.domain}/late`,
+      sortOrder: 3,
+    })
+    const first = await createCategory(app, {
+      siteId: site.id,
+      name: '排前',
+      listUrl: `https://${site.domain}/first`,
+      sortOrder: 1,
+    })
+    const middle = await createCategory(app, {
+      siteId: site.id,
+      name: '排中',
+      listUrl: `https://${site.domain}/middle`,
+      sortOrder: 2,
+    })
+
+    const before = await call(app, `/api/categories/tree?siteId=${site.id}`)
+    expect(before.status).toBe(200)
+    expect((before.body.data as Array<{ id: number }>).map((item) => item.id)).toEqual([
+      first.id,
+      middle.id,
+      late.id,
+    ])
+
+    const patched = await call(app, `/api/categories/${late.id}`, {
+      ...json({ sortOrder: 0 }, 'PATCH'),
+    })
+    expect(patched.status).toBe(200)
+    expect(patched.body.data.sortOrder).toBe(0)
+
+    const after = await call(app, `/api/categories/tree?siteId=${site.id}`)
+    expect((after.body.data as Array<{ id: number }>).map((item) => item.id)).toEqual([
+      late.id,
+      first.id,
+      middle.id,
+    ])
+  })
+
+  it('sortOrder 相同时按 id 稳定排序', async () => {
+    const site = await createSite(app, { name: '同序站', domain: domain('tie') })
+    const a = await createCategory(app, { siteId: site.id, name: 'A', listUrl: `https://${site.domain}/a`, sortOrder: 5 })
+    const b = await createCategory(app, { siteId: site.id, name: 'B', listUrl: `https://${site.domain}/b`, sortOrder: 5 })
+
+    const response = await call(app, `/api/categories/tree?siteId=${site.id}`)
+    expect((response.body.data as Array<{ id: number }>).map((item) => item.id)).toEqual([a.id, b.id])
+  })
+
+  it('tree?siteId= 只返回该站点，不串站', async () => {
+    const siteA = await createSite(app, { name: '过滤 A', domain: domain('fa') })
+    const siteB = await createSite(app, { name: '过滤 B', domain: domain('fb') })
+    const a = await createCategory(app, { siteId: siteA.id, name: 'A 栏目', listUrl: `https://${siteA.domain}/x` })
+    const b = await createCategory(app, { siteId: siteB.id, name: 'B 栏目', listUrl: `https://${siteB.domain}/x` })
+
+    const response = await call(app, `/api/categories/tree?siteId=${siteA.id}`)
+    const ids = (response.body.data as Array<{ id: number }>).map((item) => item.id)
+    expect(ids).toContain(a.id)
+    expect(ids).not.toContain(b.id)
+  })
+
+  it('三级嵌套 + 排序混合时，子树内部也按 sortOrder 排列', async () => {
+    const site = await createSite(app, { name: '嵌套排序站', domain: domain('ns') })
+    const root = await createCategory(app, { siteId: site.id, name: '根', listUrl: `https://${site.domain}/r`, sortOrder: 2 })
+    const rootEarly = await createCategory(app, { siteId: site.id, name: '根前', listUrl: `https://${site.domain}/r0`, sortOrder: 1 })
+    const childLate = await createCategory(app, {
+      siteId: site.id,
+      parentId: root.id,
+      name: '子后',
+      listUrl: `https://${site.domain}/c2`,
+      sortOrder: 2,
+    })
+    const childEarly = await createCategory(app, {
+      siteId: site.id,
+      parentId: root.id,
+      name: '子前',
+      listUrl: `https://${site.domain}/c1`,
+      sortOrder: 1,
+    })
+
+    const response = await call(app, `/api/categories/tree?siteId=${site.id}`)
+    const tree = response.body.data as Array<{ id: number; children: Array<{ id: number }> }>
+    expect(tree.map((item) => item.id)).toEqual([rootEarly.id, root.id])
+    expect(tree[1]!.children.map((item) => item.id)).toEqual([childEarly.id, childLate.id])
+  })
+})

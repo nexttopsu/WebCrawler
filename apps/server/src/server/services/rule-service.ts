@@ -184,6 +184,50 @@ export function createRule(input: RuleCreateInput): RuleDto {
 }
 
 /**
+ * 生成站点内唯一的副本名称：`原名 副本`、`原名 副本 2`……
+ *
+ * 名称上限 100 字符，先用截断后的原名，再逐级加序号，
+ * 最终整体再截断一次，避免超长原名把后缀挤掉。
+ */
+function nextCopyName(siteId: number, sourceName: string): string {
+  const suffix = ' 副本'
+  const root = sourceName.slice(0, 96).trimEnd() || '规则'
+  const models = getModels()
+
+  let candidate = `${root}${suffix}`.slice(0, 100)
+  let index = 2
+  while (models.crawlRule.findOne({ siteId, name: candidate })) {
+    candidate = `${root}${suffix} ${index}`.slice(0, 100)
+    index += 1
+    if (index > 100) {
+      throw new ConflictError('该站点下的副本过多，请先整理已有规则', { siteId })
+    }
+  }
+  return candidate
+}
+
+/**
+ * 复制规则：按当前配置与归属创建一条新规则，名称自动加「副本」后缀并保证站点内唯一。
+ *
+ * 复制出的规则拥有独立的版本线（从 v1 开始），
+ * 原规则的版本历史与引用关系都不会被带过去。
+ */
+export function duplicateRule(id: number): RuleDto {
+  const source = findRuleOrThrow(id)
+  const siteId = source.siteId ?? 0
+  const config = normalizeRuleConfig(parseStoredConfig(source.config).config)
+
+  return createRule({
+    siteId,
+    categoryId: source.categoryId ?? null,
+    name: nextCopyName(siteId, source.name ?? ''),
+    config,
+    status: source.status === 'disabled' ? 'disabled' : 'enabled',
+    description: source.description ?? null,
+  })
+}
+
+/**
  * 更新规则。
  *
  * - 配置发生变化时修订号 +1，并追加一条版本记录（历史版本只读，不被覆盖）；
@@ -339,8 +383,11 @@ export function getRuleVersion(id: number, version: number): RuleVersionDetailDt
 /**
  * 计算生效规则。
  *
- * 优先级 `站点默认规则 < 栏目规则 < 任务覆盖`，合并由 `mergeRuleConfigChain` 完成
+ * 优先级 `站点默认规则 < 规则侧绑定 < 栏目侧绑定 < 任务覆盖`，合并由 `mergeRuleConfigChain` 完成
  * （数组替换、对象与字段映射逐层合并，详见 `RULE_MERGE_STRATEGY`）。
+ *
+ * 「规则侧绑定」指规则自己的 `categoryId` 指向该栏目（采集规则页「绑定栏目」保存的就是它）；
+ * 「栏目侧绑定」指栏目的 `ruleId` 指向规则（栏目管理的「采集规则」）。两者任一存在即可命中。
  */
 export function resolveEffectiveRule(input: ResolveRuleInput): EffectiveRuleDto {
   const site = findSiteOrThrow(input.siteId)
@@ -365,7 +412,24 @@ export function resolveEffectiveRule(input: ResolveRuleInput): EffectiveRuleDto 
         { path: 'categoryId', message: '栏目不属于该站点', code: 'invalid_value' },
       ])
     }
-    if (category.ruleId) {
+    // 规则侧绑定：取该栏目下最近更新的规则（一般只有一条，多条时后保存的生效）
+    const boundRule = getModels()
+      .crawlRule.findMany({ categoryId: input.categoryId, siteId: site.id })
+      .sort(
+        (left, right) =>
+          (right.updatedAt ?? '').localeCompare(left.updatedAt ?? '') || right.id - left.id,
+      )[0]
+    if (boundRule) {
+      configs.push(readConfigOrThrow(boundRule, '栏目规则'))
+      sources.push({
+        scope: 'category',
+        ruleId: boundRule.id,
+        name: boundRule.name ?? '',
+        version: boundRule.version ?? 1,
+      })
+    }
+    // 栏目侧绑定：栏目上显式选择的采集规则，优先级高于规则侧绑定
+    if (category.ruleId && category.ruleId !== boundRule?.id) {
       const categoryRule = findByRuleIdOrThrow(category.ruleId)
       configs.push(readConfigOrThrow(categoryRule, '栏目规则'))
       sources.push({
