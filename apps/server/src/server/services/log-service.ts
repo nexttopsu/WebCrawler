@@ -3,6 +3,7 @@ import type { LogEntryDto, LogLevel } from '../../shared/index.js'
 import type { Database } from '../../database/index.js'
 import { keywordField, likePattern, paginationFields, runRawList, toPage } from '../lib/query.js'
 import { redactText, redactUrl, redactValue } from '../lib/redact.js'
+import { ValidationError } from '../errors.js'
 import { z } from 'zod'
 
 /** 单条日志的写入参数。 */
@@ -90,8 +91,11 @@ function toLogDto(row: CrawlLogRow): LogEntryDto {
 
 const LOG_COLUMNS = 'id, taskId, siteId, categoryId, url, level, stage, message, detail, createdAt'
 
-/** 分页查询日志。 */
-export function listLogs(query: LogListQuery, db?: Database) {
+/** 把查询条件翻译成 WHERE 片段，listLogs 与 clearLogs 共用，保证两边语义一致。 */
+function buildLogConditions(query: LogListQuery): {
+  conditions: string[]
+  params: Array<string | number>
+} {
   const conditions: string[] = []
   const params: Array<string | number> = []
 
@@ -128,6 +132,13 @@ export function listLogs(query: LogListQuery, db?: Database) {
     params.push(query.to)
   }
 
+  return { conditions, params }
+}
+
+/** 分页查询日志。 */
+export function listLogs(query: LogListQuery, db?: Database) {
+  const { conditions, params } = buildLogConditions(query)
+
   const database = db ?? getDatabaseContext().db
 
   const { rows, total } = runRawList<CrawlLogRow>(database, {
@@ -146,6 +157,33 @@ export function listLogs(query: LogListQuery, db?: Database) {
 /** 按任务统计日志条数，供任务详情展示。 */
 export function countTaskLogs(taskId: number): number {
   return getModels().crawlLog.count({ taskId })
+}
+
+/** 按条件清理日志的返回值：实际删除的条数。 */
+export interface LogClearResult {
+  deleted: number
+}
+
+/**
+ * 按当前筛选条件删除日志。
+ *
+ * 必须至少带一个条件：不带条件的「清空全部」走保留期自动清理（pruneCrawlLogs），
+ * 手动操作必须明确圈定范围，避免一键误删整个日志表。
+ */
+export function clearLogs(query: LogListQuery, db?: Database): LogClearResult {
+  const { conditions, params } = buildLogConditions(query)
+
+  if (conditions.length === 0) {
+    throw new ValidationError('请至少设置一个清理条件（任务、级别、阶段、关键词或时间范围）', [
+      { path: 'query', message: '至少需要一个筛选条件', code: 'too_few' },
+    ])
+  }
+
+  const database = db ?? getDatabaseContext().db
+  const result = database
+    .prepare(`DELETE FROM crawl_log WHERE ${conditions.join(' AND ')}`)
+    .run(...params)
+  return { deleted: Number(result.changes ?? 0) }
 }
 
 /**

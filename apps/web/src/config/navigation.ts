@@ -2,6 +2,7 @@ import type { Component } from 'vue'
 import {
   Activity,
   ArrowLeftRight,
+  Braces,
   FileText,
   FlaskConical,
   FolderTree,
@@ -44,6 +45,7 @@ export const navigation: NavItem[] = [
   { label: '代理管理', icon: ArrowLeftRight, to: '/proxies', group: '系统资源' },
   { label: '插件管理', icon: Puzzle, to: '/plugins', group: '系统资源' },
   { label: '系统设置', icon: Settings, to: '/settings', group: '系统资源' },
+  { label: '接口文档', icon: Braces, to: '/docs', group: '系统资源' },
 ]
 
 /** 按分组归并，侧栏按组渲染。 */

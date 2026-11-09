@@ -54,6 +54,13 @@ export interface RawListOptions {
   pageSize: number
 }
 
+/** 不分页查询的选项：与分页查询相同，只是去掉 page / pageSize。 */
+export type RawAllOptions = Omit<RawListOptions, 'page' | 'pageSize'>
+
+function buildWhere(conditions: readonly string[]): string {
+  return conditions.length > 0 ? conditions.join(' AND ') : '1 = 1'
+}
+
 /**
  * 执行一次分页查询。
  *
@@ -62,7 +69,7 @@ export interface RawListOptions {
  * 只有值通过参数绑定传入，不存在拼接用户输入的情况。
  */
 export function runRawList<T>(db: Database, options: RawListOptions): { rows: T[]; total: number } {
-  const where = options.conditions.length > 0 ? options.conditions.join(' AND ') : '1 = 1'
+  const where = buildWhere(options.conditions)
   const offset = (options.page - 1) * options.pageSize
 
   const countRow = db
@@ -77,4 +84,17 @@ export function runRawList<T>(db: Database, options: RawListOptions): { rows: T[
     .all(...options.params, options.pageSize, offset) as unknown as T[]
 
   return { rows, total }
+}
+
+/**
+ * 一次取回全部结果（不分页）。
+ *
+ * 只给数据量可控的配置类表用（网站、栏目）；文章表必须继续走 `runRawList`，
+ * 否则一条请求就能把全库正文拖出来。
+ */
+export function runRawAll<T>(db: Database, options: RawAllOptions): T[] {
+  const where = buildWhere(options.conditions)
+  return db
+    .prepare(`SELECT ${options.select} FROM ${options.from} WHERE ${where} ORDER BY ${options.orderBy}`)
+    .all(...options.params) as unknown as T[]
 }

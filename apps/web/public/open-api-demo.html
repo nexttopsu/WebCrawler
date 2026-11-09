@@ -1,0 +1,931 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>开放接口示例 · 文章数据</title>
+    <!--
+      开放接口的接入示例（纯静态单文件，不经打包，直接由 Web 服务器托管）。
+
+      演示了四件事：
+      1. GET /api/open/sites            → 建「网站 / 栏目」筛选下拉框（一次拿到全部站点与栏目）
+      2. GET /api/open/articles         → 关键词 + 网站 + 栏目 + 排序 + 分页
+      3. 上拉到底部自动加载下一页（IntersectionObserver，无需滚动事件节流）
+      4. GET /api/open/articles/:id     → 点击卡片查看详情（正文）
+
+      这是对接方视角的代码：只用 fetch，没有任何框架与内部封装，可直接复制。
+    -->
+    <style>
+      :root {
+        --bg: #f5f6f8;
+        --surface: #ffffff;
+        --border: #e5e7eb;
+        --text: #1f2328;
+        --text-2: #57606a;
+        --text-3: #8b949e;
+        --primary: #2f6fed;
+        --primary-soft: #eaf1fe;
+        --radius: 12px;
+        --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 6px 16px -8px rgba(16, 24, 40, 0.12);
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+          'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      /* ---------------- 顶部：标题 + 搜索 ---------------- */
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .wrap {
+        /* 通栏铺满：不设 max-width，只留两侧安全边距 */
+        padding: 10px 20px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 14px 0 0;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .brand span {
+        font-size: 12.5px;
+        color: var(--text-3);
+      }
+
+      .search {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 0 14px;
+      }
+
+      .field {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .field > label {
+        font-size: 12.5px;
+        color: var(--text-2);
+        white-space: nowrap;
+      }
+
+      input,
+      select {
+        height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+
+      input:focus,
+      select:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--primary-soft);
+      }
+
+      #keyword {
+        width: 220px;
+      }
+
+      button {
+        height: 34px;
+        padding: 0 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+        color: var(--text-2);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      button:hover {
+        color: var(--text);
+        border-color: #cfd4da;
+      }
+
+      button.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #fff;
+        font-weight: 600;
+      }
+
+      button.primary:hover {
+        filter: brightness(1.06);
+      }
+
+      /* ---------------- 数据源说明条 ---------------- */
+      .reqinfo {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        padding: 0 0 10px;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+
+      .reqinfo code {
+        font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+        color: var(--text-2);
+        word-break: break-all;
+      }
+
+      /* ---------------- 瀑布流 ---------------- */
+      .waterfall {
+        display: flex;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 4px 0 8px;
+      }
+
+      .column {
+        flex: 1 1 0;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        cursor: pointer;
+        /* 只过渡颜色与阴影：卡片位置/尺寸变化会引起「悬浮抖动」，这里一律不做位移 */
+        transition: box-shadow 0.18s ease, border-color 0.18s ease;
+        animation: rise 0.28s ease both;
+      }
+
+      /* 重排过的卡片不再播放入场动画，拖动窗口时不会反复闪动 */
+      .card.is-settled {
+        animation: none;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+      }
+      .cover {
+        position: relative;
+        background: #eef1f5;
+        overflow: hidden;
+        /* 高度由图片自身比例决定（见 .cover img），不裁切、不拉齐 */
+      }
+
+      .cover img {
+        /* 宽度固定为一列宽，高度按比例自适应：图片完整显示，这就是瀑布流错落的原因 */
+        display: block;
+        width: 100%;
+        height: auto;
+        /* 悬浮放大只改 transform，不影响文档流：卡片不会被撑开或移位 */
+        transform-origin: center;
+        transition: transform 0.5s cubic-bezier(0.22, 0.61, 0.36, 1);
+      }
+
+      .card:hover .cover img {
+        transform: scale(1.06);
+      }
+
+      /* 没有封面（或图片加载失败）时的文本占位 */
+      .cover--empty {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 150px;
+        background:
+          repeating-linear-gradient(45deg, #f2f4f7 0 10px, #eef1f5 10px 20px);
+        color: var(--text-3);
+        font-size: 13px;
+        letter-spacing: 1px;
+      }
+
+      .card-body {
+        padding: 12px 14px 14px;
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 650;
+        line-height: 1.45;
+        color: var(--text);
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+      }
+
+      .card-summary {
+        margin: 7px 0 0;
+        font-size: 12.8px;
+        color: var(--text-2);
+        line-height: 1.65;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
+      }
+
+      .card-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--text-3);
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        height: 20px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: var(--primary-soft);
+        color: var(--primary);
+        font-size: 11.5px;
+      }
+
+      .chip.plain {
+        background: #f1f3f5;
+        color: var(--text-2);
+      }
+
+      .meta-dot {
+        color: #d0d7de;
+      }
+
+      /* ---------------- 状态区 ---------------- */
+      .status {
+        padding: 26px 0 40px;
+        text-align: center;
+        font-size: 13px;
+        color: var(--text-3);
+      }
+
+      .status .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        margin-right: 6px;
+        border: 2px solid #d7dce2;
+        border-top-color: var(--primary);
+        border-radius: 50%;
+        vertical-align: -2px;
+        animation: spin 0.7s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .sentinel {
+        height: 1px;
+      }
+
+      /* ---------------- 详情抽屉（屏幕右侧滑出） ---------------- */
+
+      /* 关键：自定义 display:flex 会覆盖 UA 的 dialog:not([open]) { display:none }，
+         必须补回这条隐藏规则，否则页面一加载抽屉就是显示状态 */
+      dialog:not([open]) {
+        display: none;
+      }
+
+      dialog {
+        /* 锚定右缘、通栏高度：top/bottom 0 + left auto = 右侧抽屉 */
+        position: fixed;
+        inset: 0 0 0 auto;
+        margin: 0;
+        height: 100dvh;
+        /* Chromium 对 dialog 的 UA 默认是 max-height: calc(100% - 6px - 2em)，
+           会在底部留一条缝，必须显式清掉才是真正的通栏抽屉 */
+        max-height: none;
+        /* 大屏占一半宽度；窄屏占三分之二，保证正文还有可读宽度 */
+        width: 50vw;
+        max-width: none;
+        display: flex;
+        flex-direction: column;
+        padding: 0;
+        border: none;
+        border-radius: 14px 0 0 14px;
+        box-shadow: -24px 0 64px -16px rgba(16, 24, 40, 0.4);
+        color: var(--text);
+      }
+
+      @media (max-width: 640px) {
+        dialog {
+          width: 66vw;
+          border-radius: 10px 0 0 10px;
+        }
+      }
+
+      dialog[open] {
+        animation: drawer-in 0.26s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+      }
+
+      @keyframes drawer-in {
+        from {
+          transform: translateX(32px);
+          opacity: 0;
+        }
+      }
+
+      dialog::backdrop {
+        background: rgba(15, 20, 28, 0.42);
+        backdrop-filter: blur(2px);
+      }
+
+      /* 抽屉打开期间锁死背景滚动（JS 在 html 上加 drawer-open 类） */
+      html.drawer-open {
+        overflow: hidden;
+      }
+
+      .dlg-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 16px 18px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .dlg-head h2 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      .dlg-body {
+        /* 抽屉是通栏高度：头部固定，正文占剩余空间自行滚动 */
+        flex: 1 1 auto;
+        padding: 14px 18px 20px;
+        overflow-y: auto;
+      }
+
+      .dlg-close {
+        margin-left: auto;
+        flex: 0 0 auto;
+        height: 28px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
+      .dlg-cover {
+        /* 与瀑布流一致：宽度撑满抽屉，高度按原始比例完整显示，不裁切 */
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 10px;
+        margin-bottom: 12px;
+      }
+
+      .dlg-content {
+        margin: 12px 0 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: inherit;
+        font-size: 13.5px;
+        line-height: 1.85;
+        color: var(--text);
+      }
+
+      .dlg-req {
+        margin-top: 14px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #f6f8fa;
+        font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+        font-size: 11.5px;
+        color: var(--text-2);
+        word-break: break-all;
+      }
+
+      @media (max-width: 640px) {
+        .wrap {
+          padding: 6px 12px;
+        }
+
+        .waterfall {
+          gap: 12px;
+        }
+
+        .column {
+          gap: 12px;
+        }
+
+        #keyword {
+          width: 100%;
+        }
+
+        .search {
+          gap: 8px;
+        }
+
+        .field {
+          flex: 1 1 46%;
+        }
+
+        .field select {
+          flex: 1;
+          min-width: 0;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <header class="topbar">
+      <div class="wrap">
+        <div class="brand">
+          <h1>文章数据</h1>
+          <span>开放接口接入示例 · 上拉自动加载更多</span>
+        </div>
+
+        <form class="search" id="search-form">
+          <div class="field">
+            <label for="keyword">关键词</label>
+            <input id="keyword" type="search" placeholder="按标题搜索，留空为全部" autocomplete="off" />
+          </div>
+
+          <div class="field">
+            <label for="site">网站</label>
+            <select id="site"><option value="">全部网站</option></select>
+          </div>
+
+          <div class="field">
+            <label for="category">栏目</label>
+            <select id="category"><option value="">全部栏目</option></select>
+          </div>
+
+          <div class="field">
+            <label for="order">排序</label>
+            <select id="order">
+              <option value="desc">最新优先</option>
+              <option value="asc">最早优先</option>
+            </select>
+          </div>
+
+          <button type="submit" class="primary">搜索</button>
+          <button type="button" id="reset">重置</button>
+        </form>
+
+        <div class="reqinfo" id="reqinfo"></div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <div class="waterfall" id="waterfall"></div>
+      <div class="sentinel" id="sentinel"></div>
+      <div class="status" id="status"></div>
+    </main>
+
+    <dialog id="detail">
+      <div class="dlg-head">
+        <h2 id="detail-title">加载中…</h2>
+        <button type="button" class="dlg-close" id="detail-close">关闭</button>
+      </div>
+      <div class="dlg-body" id="detail-body"></div>
+    </dialog>
+
+    <script>
+      /* ==================================================================
+         配置：接口根地址。与后台同域部署时用相对路径即可；
+         跨域调用时改成完整地址，并在服务端放行 CORS。
+         ================================================================== */
+      const API_BASE = '/api/open'
+      const PAGE_SIZE = 24
+
+      const state = {
+        page: 1,
+        total: 0,
+        loading: false,
+        done: false,
+        /** @type {Array<any>} 已渲染的文章，用于弹详情 */
+        items: [],
+        /** @type {Array<HTMLElement>} 卡片按渲染顺序保存，重排时据此重新分配列 */
+        cards: [],
+        /** @type {Array<any>} /open/sites 的结果，栏目下拉框复用它，不重复请求 */
+        sites: [],
+      }
+
+      const $ = (id) => document.getElementById(id)
+      const waterfall = $('waterfall')
+      const statusEl = $('status')
+      const sentinel = $('sentinel')
+      const reqinfo = $('reqinfo')
+
+      /* ---------------------- 工具 ---------------------- */
+
+      function formatDate(value) {
+        if (!value) return '时间未知'
+        const date = new Date(value)
+        if (Number.isNaN(date.getTime())) return value
+        const pad = (n) => String(n).padStart(2, '0')
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+      }
+
+      function escapeHtml(text) {
+        return String(text ?? '').replace(/[&<>"']/g, (ch) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch],
+        )
+      }
+
+      /** 统一的 GET：网络错误、非 2xx、success=false 都抛出可读信息。 */
+      async function getJson(path, query) {
+        const url = new URL(`${API_BASE}${path}`, window.location.origin)
+        for (const [key, value] of Object.entries(query ?? {})) {
+          if (value !== '' && value !== undefined && value !== null) url.searchParams.set(key, value)
+        }
+
+        const started = performance.now()
+        const response = await fetch(url, { headers: { accept: 'application/json' } })
+        const text = await response.text()
+        const elapsed = Math.round(performance.now() - started)
+
+        let body
+        try {
+          body = JSON.parse(text)
+        } catch {
+          throw new Error(`响应不是 JSON（HTTP ${response.status}）：${text.slice(0, 120)}`)
+        }
+        if (!response.ok || body.success !== true) {
+          throw new Error(body?.error?.message ?? `HTTP ${response.status}`)
+        }
+
+        return { data: body.data, elapsed, requestId: body.meta?.requestId ?? '', url: url.pathname + url.search }
+      }
+
+      /* ---------------------- 瀑布流布局 ---------------------- */
+
+      /** 单列最小宽度与间距：列数由容器实际宽度算出来，屏幕变宽自动多列。 */
+      const MIN_CARD_WIDTH = 320
+      const CARD_GAP = 16
+
+      function columnCount() {
+        const width = waterfall.clientWidth || window.innerWidth
+        const count = Math.floor((width + CARD_GAP) / (MIN_CARD_WIDTH + CARD_GAP))
+        return Math.max(1, Math.min(8, count))
+      }
+
+      /** 保证列容器数量与当前宽度匹配，返回列数组。 */
+      function ensureColumns() {
+        const count = columnCount()
+        while (waterfall.children.length < count) {
+          const column = document.createElement('div')
+          column.className = 'column'
+          waterfall.appendChild(column)
+        }
+        while (waterfall.children.length > count) {
+          waterfall.lastElementChild.remove()
+        }
+        return [...waterfall.children]
+      }
+
+      /** 卡片追加到当前最矮的一列：图片高度不一致，错落效果就来自这里。 */
+      function shortestColumn(columns) {
+        let best = columns[0]
+        for (const column of columns) {
+          if (column.offsetHeight < best.offsetHeight) best = column
+        }
+        return best
+      }
+
+      function appendCard(card) {
+        shortestColumn(ensureColumns()).appendChild(card)
+      }
+
+      /**
+       * 重排：按卡片原始顺序重新分配到最短列。
+       *
+       * 直接遍历 DOM 里的 `.card` 是「列优先」顺序，会把卡片顺序打乱，
+       * 所以始终用 state.cards（渲染顺序）作为唯一来源。
+       */
+      function relayout() {
+        waterfall.innerHTML = ''
+        // 重排只是把同一批卡片换到别的列，不该重播入场动画（否则窗口拖拽时整屏闪烁）
+        for (const card of state.cards) card.classList.add('is-settled')
+        const columns = ensureColumns()
+        for (const card of state.cards) shortestColumn(columns).appendChild(card)
+      }
+
+      /** 等图片解码完再插入，避免「先按 0 高度排版、图片加载后全部错位」。 */
+      function preloadImages(card) {
+        const images = [...card.querySelectorAll('img')]
+        if (images.length === 0) return Promise.resolve()
+
+        return Promise.all(
+          images.map(
+            (image) =>
+              new Promise((resolve) => {
+                if (image.complete && image.naturalWidth > 0) return resolve()
+                const done = () => resolve()
+                image.addEventListener('load', done, { once: true })
+                image.addEventListener('error', done, { once: true })
+                // 外链图慢也不能无限等，兜底 1.5 秒后按当前高度排版
+                setTimeout(done, 1500)
+              }),
+          ),
+        )
+      }
+
+      /** 窗口宽度变化：列数可能变、每列宽度也变（图片高度跟着变），整页重排。 */
+      let relayoutTimer = null
+      window.addEventListener('resize', () => {
+        clearTimeout(relayoutTimer)
+        relayoutTimer = setTimeout(relayout, 120)
+      })
+
+      /* ---------------------- 渲染 ---------------------- */
+
+      function coverHtml(item) {
+        if (!item.coverUrl) return '<div class="cover cover--empty">暂无图片</div>'
+        // 不加 loading="lazy"：卡片插入前要先量到真实高度，懒加载会让高度一直是 0
+        return `
+          <div class="cover">
+            <img src="${escapeHtml(item.coverUrl)}" alt="" decoding="async" />
+          </div>`
+      }
+
+      function createCard(item) {
+        const card = document.createElement('article')
+        card.className = 'card'
+        card.dataset.id = String(item.id)
+        card.innerHTML = `
+          ${coverHtml(item)}
+          <div class="card-body">
+            <h2 class="card-title" title="${escapeHtml(item.title || '（无标题）')}">${escapeHtml(item.title || '（无标题）')}</h2>
+            ${item.summary ? `<p class="card-summary" title="${escapeHtml(item.summary)}">${escapeHtml(item.summary)}</p>` : ''}
+            <div class="card-meta">
+              ${item.siteName ? `<span class="chip plain">${escapeHtml(item.siteName)}</span>` : ''}
+              ${item.categoryName ? `<span class="chip">${escapeHtml(item.categoryName)}</span>` : ''}
+              <span class="meta-dot">·</span>
+              <span>${formatDate(item.articleTime)}</span>
+              ${item.author ? `<span class="meta-dot">·</span><span>${escapeHtml(item.author)}</span>` : ''}
+            </div>
+          </div>`
+
+        // 图片加载失败（外链失效、防盗链）退化成「暂无图片」占位，不留破图标
+        const image = card.querySelector('.cover img')
+        if (image) {
+          image.addEventListener('error', () => {
+            image.parentElement.outerHTML = '<div class="cover cover--empty">暂无图片</div>'
+          })
+        }
+
+        card.addEventListener('click', () => openDetail(item.id))
+        return card
+      }
+
+      function renderStatus(html) {
+        statusEl.innerHTML = html
+      }
+
+      /* ---------------------- 列表加载 ---------------------- */
+
+      let requestSeq = 0
+
+      async function loadPage({ reset = false } = {}) {
+        if (state.loading) return
+        if (!reset && state.done) return
+
+        state.loading = true
+        const seq = ++requestSeq
+        if (reset) {
+          state.page = 1
+          state.done = false
+          state.items = []
+          state.cards = []
+          waterfall.innerHTML = ''
+        }
+        renderStatus('<span class="spinner"></span>加载中…')
+
+        const query = {
+          page: state.page,
+          pageSize: PAGE_SIZE,
+          order: $('order').value,
+          siteId: $('site').value,
+          categoryId: $('category').value,
+          keyword: $('keyword').value.trim(),
+        }
+
+        try {
+          const result = await getJson('/articles', query)
+          // 快速切换筛选时丢弃过期响应，避免旧结果覆盖新结果
+          if (seq !== requestSeq) return
+
+          const items = result.data.items ?? []
+          state.total = result.data.total ?? 0
+          state.items.push(...items)
+
+          // 先并行把图片加载完，再按顺序插到最矮的列：
+          // 否则图片后到会让整列高度突变，瀑布流会「跳」一下
+          const cards = items.map(createCard)
+          await Promise.all(cards.map(preloadImages))
+          if (seq !== requestSeq) return
+
+          const columns = ensureColumns()
+          for (const card of cards) {
+            state.cards.push(card)
+            shortestColumn(columns).appendChild(card)
+          }
+
+          const loaded = state.items.length
+          state.done = items.length === 0 || loaded >= state.total
+          state.page += 1
+
+          reqinfo.innerHTML = `<span>上次请求：<code>GET ${escapeHtml(result.url)}</code></span>
+            <span>耗时 ${result.elapsed} ms</span>
+            <span>requestId ${escapeHtml(result.requestId)}</span>`
+
+          if (state.done) {
+            renderStatus(loaded === 0 ? '没有匹配的文章，换个筛选条件试试' : `已加载全部 ${loaded} 条`)
+          } else {
+            renderStatus(`已加载 ${loaded} / ${state.total} 条，上拉继续加载`)
+          }
+        } catch (error) {
+          if (seq !== requestSeq) return
+          state.done = true
+          renderStatus(`加载失败：${escapeHtml(error.message)}`)
+        } finally {
+          state.loading = false
+          // 首屏/筛选后可能一页撑不满屏幕：此时 IntersectionObserver 不会再触发，主动补一页
+          ensureFilled()
+        }
+      }
+
+      /** 哨兵还在可视区附近且没加载完，就继续拉下一页。 */
+      function ensureFilled() {
+        if (state.done || state.loading) return
+        if (sentinel.getBoundingClientRect().top < window.innerHeight + 400) loadPage()
+      }
+
+      /* ---------------------- 搜索条件 ---------------------- */
+
+      async function loadSites() {
+        try {
+          const { data } = await getJson('/sites')
+          state.sites = data
+          const siteSelect = $('site')
+          for (const site of data) {
+            siteSelect.insertAdjacentHTML(
+              'beforeend',
+              `<option value="${site.id}">${escapeHtml(site.name)}</option>`,
+            )
+          }
+        } catch (error) {
+          reqinfo.innerHTML = `<span>网站列表加载失败：${escapeHtml(error.message)}</span>`
+        }
+      }
+
+      /** 栏目下拉框跟随所选网站：网站接口已经把栏目一起返回，直接复用，不再请求。 */
+      function fillCategories(siteId) {
+        const categorySelect = $('category')
+        categorySelect.innerHTML = '<option value="">全部栏目</option>'
+        if (!siteId) return
+
+        const site = state.sites.find((item) => String(item.id) === String(siteId))
+        for (const column of site?.columns ?? []) {
+          categorySelect.insertAdjacentHTML(
+            'beforeend',
+            `<option value="${column.id}">${escapeHtml(column.name)}</option>`,
+          )
+        }
+      }
+
+      $('search-form').addEventListener('submit', (event) => {
+        event.preventDefault()
+        loadPage({ reset: true })
+      })
+
+      $('site').addEventListener('change', (event) => {
+        fillCategories(event.target.value)
+        loadPage({ reset: true })
+      })
+
+      $('category').addEventListener('change', () => loadPage({ reset: true }))
+      $('order').addEventListener('change', () => loadPage({ reset: true }))
+
+      $('reset').addEventListener('click', () => {
+        $('keyword').value = ''
+        $('site').value = ''
+        $('order').value = 'desc'
+        fillCategories('')
+        loadPage({ reset: true })
+      })
+
+      /* ---------------------- 上拉加载更多 ---------------------- */
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting)) loadPage()
+        },
+        // 提前 400px 触发，滚到底时下一页已经在路上
+        { rootMargin: '0px 0px 400px 0px' },
+      )
+      observer.observe(sentinel)
+
+      /* ---------------------- 详情 ---------------------- */
+
+      const dialog = $('detail')
+
+      /** 抽屉打开期间锁死背景滚动，避免左侧瀑布流跟着滚走。 */
+      function lockScroll() {
+        // 先算滚动条宽度再锁（锁完后 clientWidth 会变大，算不准）
+        const scrollbar = window.innerWidth - document.documentElement.clientWidth
+        document.documentElement.classList.add('drawer-open')
+        // 补偿滚动条消失造成的横向跳动
+        if (scrollbar > 0) document.body.style.paddingRight = `${scrollbar}px`
+      }
+
+      function unlockScroll() {
+        document.documentElement.classList.remove('drawer-open')
+        document.body.style.paddingRight = ''
+      }
+
+      // close 事件覆盖所有关闭途径：按钮、遮罩、Esc（cancel 之后也会触发 close）。
+      // 注意 dialog 没有 open 事件，锁定要在 showModal() 后手动调用
+      dialog.addEventListener('close', unlockScroll)
+
+      async function openDetail(id) {
+        dialog.showModal()
+        lockScroll()
+        $('detail-title').textContent = '加载中…'
+        $('detail-body').innerHTML = ''
+
+        try {
+          const { data, url } = await getJson(`/articles/${id}`)
+          $('detail-title').textContent = data.title || '（无标题）'
+          $('detail-body').innerHTML = `
+            ${data.coverUrl ? `<img class="dlg-cover" src="${escapeHtml(data.coverUrl)}" alt="" />` : ''}
+            <div class="card-meta">
+              ${data.siteName ? `<span class="chip plain">${escapeHtml(data.siteName)}</span>` : ''}
+              ${data.categoryName ? `<span class="chip">${escapeHtml(data.categoryName)}</span>` : ''}
+              <span class="meta-dot">·</span>
+              <span>${formatDate(data.articleTime)}</span>
+              ${data.author ? `<span class="meta-dot">·</span><span>${escapeHtml(data.author)}</span>` : ''}
+              ${data.url ? `<span class="meta-dot">·</span><a href="${escapeHtml(data.url)}" target="_blank" rel="noopener" style="color:#2f6fed">原文链接</a>` : ''}
+            </div>
+            ${data.content ? `<pre class="dlg-content">${escapeHtml(data.content)}</pre>` : '<p class="card-summary">（该文章没有正文）</p>'}
+            <div class="dlg-req">GET ${escapeHtml(url)}</div>`
+        } catch (error) {
+          $('detail-title').textContent = '加载失败'
+          $('detail-body').innerHTML = `<p class="card-summary">${escapeHtml(error.message)}</p>`
+        }
+      }
+
+      $('detail-close').addEventListener('click', () => dialog.close())
+      dialog.addEventListener('click', (event) => {
+        if (event.target === dialog) dialog.close()
+      })
+
+      /* ---------------------- 启动 ---------------------- */
+      loadSites()
+      loadPage({ reset: true })
+    </script>
+  </body>
+</html>

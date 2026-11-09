@@ -139,4 +139,26 @@ describe('日志与脱敏', () => {
     const badFrom = await call(app, '/api/logs?from=not-a-date')
     expect(badFrom.status).toBe(400)
   })
+
+  it('按条件清理：删除匹配条件的日志，无条件时拒绝', async () => {
+    writeLog({ taskId: 920, level: 'info', stage: 'task', message: '保留的任务日志' })
+    writeLog({ taskId: 921, level: 'error', stage: 'request', message: '待清理的请求失败' })
+    writeLog({ taskId: 921, level: 'error', stage: 'request', message: '另一条请求失败' })
+
+    // 无条件清理必须拒绝，避免误删整个日志表
+    const noCondition = await call(app, '/api/logs', { method: 'DELETE' })
+    expect(noCondition.status).toBe(400)
+    expect(noCondition.body.error.code).toBe('VALIDATION_ERROR')
+
+    // 按任务 + 级别清理
+    const cleared = await call(app, '/api/logs?taskId=921&level=error', { method: 'DELETE' })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.data.deleted).toBe(2)
+
+    // 只剩未匹配的日志
+    const rest = await call(app, '/api/logs?taskId=921')
+    expect(rest.body.data.total).toBe(0)
+    const kept = await call(app, '/api/logs?taskId=920')
+    expect(kept.body.data.total).toBe(1)
+  })
 })

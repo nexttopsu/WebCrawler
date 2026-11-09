@@ -90,6 +90,14 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/SettingsView.vue'),
         meta: { title: '系统设置' },
       },
+      {
+        // 注意：不要用 /api-docs 这类以 /api 开头的路径，
+        // 会被 Vite / Nginx 的 /api 前缀代理转发给后端
+        path: 'docs',
+        name: 'api-docs',
+        component: () => import('@/views/ApiDocsView.vue'),
+        meta: { title: '接口文档' },
+      },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },

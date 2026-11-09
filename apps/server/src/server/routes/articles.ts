@@ -3,6 +3,7 @@ import { jsonOk } from '../lib/response.js'
 import { parseBody, parseIdParam, parseQuery } from '../lib/validation.js'
 import {
   articleListQuerySchema,
+  articleUpdateSchema,
   deleteArticle,
   deleteArticles,
   EXPORT_MAX,
@@ -10,6 +11,7 @@ import {
   getArticle,
   getArticleRaw,
   listArticles,
+  updateArticle,
 } from '../services/article-service.js'
 import {
   articleCollectDetailSchema,
@@ -86,6 +88,17 @@ export function articleRoutes(deps: ServiceDeps): ApiRoute[] {
       method: 'GET',
       path: '/api/articles/:id/raw',
       handler: (event) => jsonOk(event, getArticleRaw(parseIdParam(event))),
+    },
+    {
+      // 编辑文章：只允许改采集到的内容字段（标题、作者、摘要、正文、封面、文章时间）；
+      // 站点、栏目、任务等归属信息不在 Schema 白名单里，传了会返回 400
+      method: 'PATCH',
+      path: '/api/articles/:id',
+      handler: async (event) => {
+        const id = parseIdParam(event)
+        const input = await parseBody(event, articleUpdateSchema)
+        return jsonOk(event, updateArticle(id, input))
+      },
     },
     {
       method: 'DELETE',

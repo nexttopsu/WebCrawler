@@ -4,12 +4,12 @@
  *
  * 正文为采集到的纯文本；原始 HTML 来自 rawHtml（服务端原样返回，查看时只读）。
  */
-import { computed, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft, ExternalLink, RefreshCw, Trash2 } from '@lucide/vue'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ArrowLeft, ExternalLink, Pencil, RefreshCw, Trash2 } from '@lucide/vue'
 import type { ArticleDto, ArticleRawDto } from '@webcrawler/shared'
-import { deleteArticle, getArticle, getArticleRaw } from '@/api/articles'
+import { deleteArticle, getArticle, getArticleRaw, updateArticle } from '@/api/articles'
 import { errorMessage } from '@/api/client'
 import { useAsyncState } from '@/composables/useAsyncState'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -19,6 +19,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import CodeViewer from '@/components/common/CodeViewer.vue'
 import JsonViewer from '@/components/common/JsonViewer.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import FormDialog from '@/components/common/FormDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -83,6 +84,81 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
+/* ---------------------------------- 编辑 ---------------------------------- */
+
+/**
+ * 编辑弹窗：只改采集到的内容字段。
+ *
+ * 站点、栏目、原文链接是归属信息（服务端白名单外，传了会 400），弹窗里只读展示。
+ */
+const editVisible = ref(false)
+const editSubmitting = ref(false)
+const editFormRef = ref<FormInstance>()
+
+const editForm = reactive({
+  title: '',
+  author: '',
+  articleTime: null as string | null,
+  coverUrl: '',
+  summary: '',
+  content: '',
+})
+
+const editRules: FormRules = {
+  title: [{ required: true, message: '标题不能为空', trigger: 'blur' }],
+}
+
+function openEdit(): void {
+  const data = article.data.value
+  if (!data) return
+  editForm.title = data.title
+  editForm.author = data.author ?? ''
+  // el-date-picker 用本地时间展示，这里转成不带时区的本地写法
+  editForm.articleTime = data.articleTime ? toLocalInput(data.articleTime) : null
+  editForm.coverUrl = data.coverUrl ?? ''
+  editForm.summary = data.summary ?? ''
+  editForm.content = data.content ?? ''
+  editVisible.value = true
+}
+
+/** ISO 字符串 → `YYYY-MM-DDTHH:mm:ss`（按本地时间），供 datetime 输入框回显。 */
+function toLocalInput(iso: string): string | null {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+/** 空串转 null：服务端把空串与 null 都视为「清空该字段」。 */
+const blankToNull = (value: string): string | null => {
+  const trimmed = value.trim()
+  return trimmed ? trimmed : null
+}
+
+async function submitEdit(): Promise<void> {
+  const valid = await editFormRef.value?.validate().catch(() => false)
+  if (!valid) return
+
+  editSubmitting.value = true
+  try {
+    await updateArticle(articleId.value, {
+      title: editForm.title.trim(),
+      author: blankToNull(editForm.author),
+      articleTime: editForm.articleTime,
+      coverUrl: blankToNull(editForm.coverUrl),
+      summary: blankToNull(editForm.summary),
+      content: editForm.content,
+    })
+    ElMessage.success('文章已更新')
+    editVisible.value = false
+    article.run()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    editSubmitting.value = false
+  }
+}
+
 /* --------------------------------- 展示辅助 -------------------------------- */
 
 function formatTime(value: string | null | undefined): string {
@@ -117,6 +193,10 @@ const jsonValue = computed(() => {
         </el-button>
         <el-button :loading="article.loading.value" @click="article.run()">
           <RefreshCw :size="14" />
+        </el-button>
+        <el-button v-if="article.data.value" type="primary" plain @click="openEdit">
+          <Pencil :size="14" />
+          <span>编辑</span>
         </el-button>
         <el-button v-if="article.data.value" type="danger" plain @click="deleteVisible = true">
           <Trash2 :size="14" />
@@ -204,6 +284,48 @@ const jsonValue = computed(() => {
       <p class="wb-secondary">{{ article.data.value?.title || '（无标题）' }}</p>
       <p class="wb-secondary">删除后不可恢复。</p>
     </ConfirmDialog>
+
+    <FormDialog
+      v-model="editVisible"
+      title="编辑文章"
+      :loading="editSubmitting"
+      :width="640"
+      description="只能修改采集到的内容字段；站点、栏目、原文链接等归属信息不可修改。作者、摘要、封面留空表示清除。"
+      @submit="submitEdit"
+    >
+      <el-form ref="editFormRef" :model="editForm" :rules="editRules" label-width="82px" label-position="right">
+        <el-form-item label="标题" prop="title">
+          <el-input v-model="editForm.title" maxlength="300" show-word-limit />
+        </el-form-item>
+        <el-form-item label="站点 / 栏目">
+          <el-input :model-value="`${article.data.value?.siteName ?? '—'} · ${article.data.value?.categoryName ?? '未分类'}`" disabled />
+        </el-form-item>
+        <el-form-item label="原文链接">
+          <el-input :model-value="article.data.value?.url" disabled />
+        </el-form-item>
+        <el-form-item label="作者">
+          <el-input v-model="editForm.author" maxlength="100" clearable placeholder="留空表示无作者" />
+        </el-form-item>
+        <el-form-item label="文章时间">
+          <el-date-picker
+            v-model="editForm.articleTime"
+            type="datetime"
+            placeholder="选择原站点发布时间"
+            value-format="YYYY-MM-DDTHH:mm:ss"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="封面图">
+          <el-input v-model="editForm.coverUrl" clearable placeholder="http(s) 完整地址，留空表示无封面" />
+        </el-form-item>
+        <el-form-item label="摘要">
+          <el-input v-model="editForm.summary" type="textarea" :rows="3" maxlength="5000" show-word-limit />
+        </el-form-item>
+        <el-form-item label="正文">
+          <el-input v-model="editForm.content" type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" placeholder="纯文本正文" />
+        </el-form-item>
+      </el-form>
+    </FormDialog>
   </div>
 </template>
 

@@ -8,16 +8,18 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Copy, RefreshCw } from '@lucide/vue'
+import { Copy, RefreshCw, Trash2 } from '@lucide/vue'
 import type { LogEntryDto, SiteDto } from '@webcrawler/shared'
-import { listLogs } from '@/api/logs'
+import { clearLogs, listLogs } from '@/api/logs'
 import { listSites } from '@/api/sites'
 import { useListQuery } from '@/composables/useListQuery'
+import { errorMessage } from '@/api/client'
 import PageHeader from '@/components/common/PageHeader.vue'
 import SearchBar from '@/components/common/SearchBar.vue'
 import FilterBar from '@/components/common/FilterBar.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import StatusTag from '@/components/common/StatusTag.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -89,6 +91,55 @@ const LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
 const errorCount = computed(() => list.rows.value.filter((row) => row.level === 'error').length)
 
+/** 是否设置了至少一个筛选条件：没有条件时服务端会拒绝清理。 */
+const hasClearConditions = computed(() => list.isFiltered())
+
+/** 把当前筛选条件翻译成人话，放进二次确认弹窗。 */
+const clearConditionText = computed(() => {
+  const parts: string[] = []
+  const { taskId, siteId, level, stage, keyword, range } = list.filters
+  if (taskId) parts.push(`任务 #${taskId}`)
+  if (siteId) {
+    const site = siteOptions.value.find((item) => item.id === siteId)
+    parts.push(`网站 ${site?.name ?? siteId}`)
+  }
+  if (level) parts.push(`级别 ${level.toUpperCase()}`)
+  if (stage) parts.push(`阶段 ${stage}`)
+  if (keyword) parts.push(`关键词「${keyword}」`)
+  if (range?.[0]) parts.push(`从 ${formatTime(range[0])}`)
+  if (range?.[1]) parts.push(`到 ${formatTime(range[1])}`)
+  return parts.join('、') || '（未设置条件）'
+})
+
+const clearVisible = ref(false)
+const clearLoading = ref(false)
+
+function openClear(): void {
+  clearVisible.value = true
+}
+
+async function confirmClear(): Promise<void> {
+  clearLoading.value = true
+  try {
+    const { deleted } = await clearLogs({
+      keyword: list.filters.keyword || undefined,
+      taskId: list.filters.taskId || undefined,
+      siteId: list.filters.siteId || undefined,
+      level: (list.filters.level || undefined) as LogEntryDto['level'] | undefined,
+      stage: list.filters.stage || undefined,
+      from: list.filters.range?.[0],
+      to: list.filters.range?.[1],
+    })
+    clearVisible.value = false
+    ElMessage.success(`已清理 ${deleted} 条日志`)
+    list.load()
+  } catch (cause) {
+    ElMessage.error(errorMessage(cause))
+  } finally {
+    clearLoading.value = false
+  }
+}
+
 function formatTime(value: string | null): string {
   if (!value) return '—'
   const date = new Date(value)
@@ -116,6 +167,24 @@ void loadSites()
     <PageHeader title="日志中心" description="记录采集、调度与插件各阶段的运行信息；URL 与认证信息在写入前已脱敏。">
       <template #actions>
         <span v-if="errorCount" class="error-hint">{{ errorCount }} 条错误</span>
+        <el-tooltip
+          :content="hasClearConditions ? '按当前筛选条件清理日志' : '请先设置至少一个筛选条件'"
+          :disabled="hasClearConditions"
+          placement="bottom"
+        >
+          <span>
+            <el-button
+              type="danger"
+              plain
+              :disabled="!hasClearConditions"
+              :loading="clearLoading"
+              @click="openClear"
+            >
+              <Trash2 :size="14" />
+              清理日志
+            </el-button>
+          </span>
+        </el-tooltip>
         <el-button :loading="list.loading.value" @click="list.load()">
           <RefreshCw :size="14" />
         </el-button>
@@ -247,6 +316,19 @@ void loadSites()
         </template>
       </el-table-column>
     </DataTable>
+
+    <ConfirmDialog
+      v-model="clearVisible"
+      title="清理日志"
+      :danger="true"
+      :loading="clearLoading"
+      confirm-text="清理"
+      @confirm="confirmClear"
+    >
+      <p class="wb-secondary">将删除符合以下条件的日志：</p>
+      <p class="clear-condition">{{ clearConditionText }}</p>
+      <p class="wb-secondary">清理后不可恢复，共 {{ list.total.value }} 条日志待匹配。</p>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -303,4 +385,12 @@ void loadSites()
   display: flex;
   gap: 4px;
 }
+
+.clear-condition {
+  margin: 6px 0;
+  font-size: 13px;
+  color: var(--wb-danger);
+  word-break: break-all;
+}
+
 </style>

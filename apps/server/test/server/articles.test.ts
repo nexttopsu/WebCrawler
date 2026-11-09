@@ -193,6 +193,78 @@ describe('文章管理', () => {
     expect(detail.body.data.content).toContain('新进展')
   })
 
+  it('编辑：PATCH 修改采集内容字段，归属字段保持不变', async () => {
+    const list = await call(app, '/api/articles?keyword=轨道交通')
+    const id = list.body.data.items[0].id
+
+    const updated = await call(
+      app,
+      `/api/articles/${id}`,
+      json(
+        {
+          title: '轨道交通报道（修订）',
+          author: '记者 王五',
+          summary: '修订后的摘要',
+          content: '修订后的正文内容。',
+          coverUrl: 'https://cdn.example.com/rail.png',
+          articleTime: '2026-01-02 11:45',
+        },
+        'PATCH',
+      ),
+    )
+    expect(updated.status).toBe(200)
+    const data = updated.body.data
+    expect(data.title).toBe('轨道交通报道（修订）')
+    expect(data.author).toBe('记者 王五')
+    expect(data.summary).toBe('修订后的摘要')
+    expect(data.content).toBe('修订后的正文内容。')
+    expect(data.coverUrl).toBe('https://cdn.example.com/rail.png')
+    expect(data.articleTime).toMatch(/^2026-01-02T/)
+    // 归属信息不可通过编辑接口改动
+    expect(data.siteId).toBe(site.id)
+    expect(data.categoryId).toBe(category.id)
+    expect(data.url).toBe('https://example.com/article/2')
+  })
+
+  it('编辑：空串 / null 清空可选字段', async () => {
+    const list = await call(app, '/api/articles?keyword=社区服务')
+    const id = list.body.data.items[0].id
+
+    const cleared = await call(
+      app,
+      `/api/articles/${id}`,
+      json({ coverUrl: '', articleTime: null, summary: '', author: null }, 'PATCH'),
+    )
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.data.coverUrl).toBeNull()
+    expect(cleared.body.data.articleTime).toBeNull()
+    expect(cleared.body.data.summary).toBeNull()
+    expect(cleared.body.data.author).toBeNull()
+  })
+
+  it('编辑：归属字段与未知字段返回 400，空 payload 400，不存在 404', async () => {
+    const list = await call(app, '/api/articles?keyword=轨道交通')
+    const id = list.body.data.items[0].id
+
+    for (const payload of [
+      { siteId: 999 },
+      { categoryId: 999 },
+      { taskId: 1 },
+      { url: 'https://evil.example.com/x' },
+      { detailStatus: 'collected' },
+    ]) {
+      const rejected = await call(app, `/api/articles/${id}`, json(payload, 'PATCH'))
+      expect(rejected.status).toBe(400)
+      expect(rejected.body.success).toBe(false)
+    }
+
+    const empty = await call(app, `/api/articles/${id}`, json({}, 'PATCH'))
+    expect(empty.status).toBe(400)
+
+    const missing = await call(app, '/api/articles/999999', json({ title: 'x' }, 'PATCH'))
+    expect(missing.status).toBe(404)
+  })
+
   it('导出 JSON：Content-Disposition、条数上限与结构正确', async () => {
     const response = await app.request('/api/articles/export?format=json&limit=2')
     expect(response.status).toBe(200)

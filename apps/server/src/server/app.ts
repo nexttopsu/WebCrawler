@@ -19,6 +19,7 @@ import { proxyRoutes } from './routes/proxies.js'
 import { taskRoutes } from './routes/tasks.js'
 import { articleRoutes } from './routes/articles.js'
 import { logRoutes } from './routes/logs.js'
+import { openRoutes } from './routes/open.js'
 import { scheduleRoutes } from './routes/schedules.js'
 import { pluginRoutes } from './routes/plugins.js'
 import { registerBuiltinPlugins } from './services/plugin-service.js'
@@ -103,6 +104,8 @@ export function createApp(options: CreateAppOptions = {}): H3 {
   const routes: ApiRoute[] = [
     ...healthRoutes(config),
     ...systemRoutes(config, registry),
+    // 对外开放的只读接口：独立前缀，全部是 GET
+    ...openRoutes(),
     ...siteRoutes(serviceDeps),
     ...categoryRoutes(serviceDeps),
     ...ruleRoutes(serviceDeps),

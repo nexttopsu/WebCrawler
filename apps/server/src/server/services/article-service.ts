@@ -643,6 +643,66 @@ export function deleteArticle(id: number): { deleted: boolean } {
   return { deleted: true }
 }
 
+/**
+ * 文章编辑：只允许修改「采集到的内容字段」。
+ *
+ * `.strict()` 是关键防线——siteId / categoryId / taskId / url / detailStatus /
+ * rawHtml / extra 一律不在白名单里，传了直接 400，而不是静默忽略；
+ * 站点、栏目等归属信息只能走对应的站点 / 栏目管理接口。
+ */
+export const articleUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1, '标题不能为空').max(300, '标题最长 300 字').optional(),
+    author: z.string().trim().max(100, '作者最长 100 字').nullable().optional(),
+    summary: z.string().trim().max(5000, '摘要最长 5000 字').nullable().optional(),
+    /** 纯文本正文 */
+    content: z.string().max(2_000_000, '正文过长').nullable().optional(),
+    /** 空串 / null 表示清除封面 */
+    coverUrl: z.string().trim().max(2048, '封面地址过长').nullable().optional(),
+    /** ISO 8601 或可解析的时间写法；null 表示清除文章时间 */
+    articleTime: isoTimeField.nullable().optional(),
+  })
+  .strict()
+
+export type ArticleUpdateInput = z.infer<typeof articleUpdateSchema>
+
+/**
+ * 更新文章的采集内容字段，返回更新后的完整详情。
+ *
+ * 字段语义与采集入库保持一致：author / summary / articleTime 传空串或 null 会清空，
+ * coverUrl 非法（非 http(s)）会被归一化为 null 而不是报错（与采集时的容错一致）。
+ */
+export function updateArticle(id: number, input: ArticleUpdateInput): ArticleDto {
+  const models = getModels()
+  const row = models.article.findById(id)
+  if (!row) throw new NotFoundError(`文章 ${id} 不存在`)
+
+  const fields: Record<string, unknown> = {}
+  const blankToNull = (value: string | null): string | null => {
+    const trimmed = value?.trim()
+    return trimmed ? trimmed : null
+  }
+
+  if (input.title !== undefined) fields.title = input.title
+  if (input.author !== undefined) fields.author = blankToNull(input.author)
+  if (input.summary !== undefined) fields.summary = blankToNull(input.summary)
+  if (input.content !== undefined) fields.content = input.content ?? ''
+  if (input.coverUrl !== undefined) {
+    fields.coverUrl = resolveCoverUrl(input.coverUrl, row.url ?? '')
+  }
+  if (input.articleTime !== undefined) {
+    // isoTimeField 已把合法输入转成 ISO；null（清除）原样写入
+    fields.articleTime = input.articleTime
+  }
+
+  if (Object.keys(fields).length === 0) {
+    throw new BadRequestError('没有要更新的字段')
+  }
+
+  models.article.update(id, fields)
+  return getArticle(id)
+}
+
 /** 批量删除：单次上限 100，缺失的 id 单独返回。 */
 export function deleteArticles(ids: number[]): ArticleDeleteResultDto {
   const unique = [...new Set(ids)]

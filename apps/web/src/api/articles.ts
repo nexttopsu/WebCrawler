@@ -37,6 +37,25 @@ export function getArticleRaw(id: number): Promise<ArticleRawDto> {
   return api.get<ArticleRawDto>(`/articles/${id}/raw`)
 }
 
+/**
+ * 编辑文章的采集内容字段。
+ *
+ * 服务端 Schema 是白名单式的：只有标题、作者、摘要、正文、封面、文章时间
+ * 可以改；siteId / categoryId / url / detailStatus 等归属与状态字段传了会 400。
+ */
+export interface ArticleUpdatePayload {
+  title?: string
+  author?: string | null
+  summary?: string | null
+  content?: string | null
+  coverUrl?: string | null
+  articleTime?: string | null
+}
+
+export function updateArticle(id: number, payload: ArticleUpdatePayload): Promise<ArticleDto> {
+  return api.patch<ArticleDto>(`/articles/${id}`, payload)
+}
+
 export function deleteArticle(id: number): Promise<ArticleDeleteResultDto> {
   return api.delete<ArticleDeleteResultDto>(`/articles/${id}`)
 }

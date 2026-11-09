@@ -1,7 +1,7 @@
 /**
  * 第六阶段 UI 冒烟。
  *
- * 覆盖：11 个导航页 + 2 个详情页的加载、控制台错误、主题切换、路由跳转、
+ * 覆盖：导航页（含接口文档）+ 详情页的加载、控制台错误、主题切换、路由跳转、
  * 关键按钮行为（打开/关闭新建弹窗、切换筛选），并输出截图。
  *
  * 用法（需先启动后端 3000、fixture 4100、前端 5173）：
@@ -30,6 +30,7 @@ const PAGES = [
   { path: '/plugins', name: '09-plugins', expect: '插件管理' },
   { path: '/logs', name: '10-logs', expect: '日志中心' },
   { path: '/settings', name: '11-settings', expect: '系统设置' },
+  { path: '/docs', name: '11b-api-docs', expect: '接口文档' },
 ]
 
 const problems = []
@@ -87,7 +88,7 @@ async function main() {
     await page.waitForURL(/\/articles\/\d+/, { timeout: 8000 }).catch(() => problems.push('文章标题没有跳转详情'))
     await page.waitForTimeout(900)
     await page.screenshot({ path: join(OUT, '13-article-detail.png'), fullPage: true })
-    const article = await page.locator('.wb-article').count()
+    const article = await page.locator('.article-text').count()
     if (article === 0) problems.push('文章详情页没有渲染正文')
     // 切到原始 HTML
     await page.getByRole('button', { name: /原始 HTML/ }).click()
@@ -159,6 +160,27 @@ async function main() {
   await page.goto(`${ORIGIN}/plugins`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(500)
   await page.screenshot({ path: join(OUT, '20-plugins.png'), fullPage: true })
+
+  // 8b) 接口文档：在线调试应能拿到真实响应（只读接口，不会写数据）
+  await page.goto(`${ORIGIN}/docs`, { waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: /发送请求/ }).click()
+  await page.waitForTimeout(1500)
+  const debugStatus = await page
+    .locator('.result .status')
+    .first()
+    .textContent()
+    .catch(() => '')
+  if (!debugStatus.includes('200')) {
+    problems.push(`接口文档在线调试未返回 200，实际「${debugStatus.trim()}」`)
+  }
+  await page.screenshot({ path: join(OUT, '20b-api-docs-debug.png'), fullPage: true })
+
+  // 8c) 接口示例页：public 下的静态单文件，瀑布流卡片应能渲染出来
+  await page.goto(`${ORIGIN}/open-api-demo.html`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1200)
+  const demoCards = await page.locator('.card').count()
+  if (demoCards === 0) problems.push('接口示例页没有渲染出瀑布流卡片')
+  await page.screenshot({ path: join(OUT, '20c-open-api-demo.png'), fullPage: true })
 
   // 9) 窄屏：侧栏应变成抽屉，不能常驻遮挡内容
   const narrowPage = await browser.newPage({ viewport: { width: 900, height: 900 } })
