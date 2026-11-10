@@ -53,6 +53,14 @@ const MEMORY_FILES = new Set([':memory:', 'file::memory:', 'file::memory:?cache=
 
 let context: DebugDatabaseContext | undefined
 
+/**
+ * 最近一次初始化用的文件路径。
+ *
+ * 连接关闭后仍然保留：调用方可以在「库被关掉 / 文件被删掉」之后按原路径重建，
+ * 不必再猜一次配置（测试注入的 `:memory:` 也能原样重建）。
+ */
+let lastFile: string | undefined
+
 function ensureParentDirectory(file: string): void {
   if (MEMORY_FILES.has(file) || file.startsWith('file:')) return
   mkdirSync(dirname(resolve(file)), { recursive: true })
@@ -90,7 +98,23 @@ export function initDebugDatabase(file: string): DebugDatabaseContext {
   }
 
   context = { db, file: target }
+  lastFile = target
   return context
+}
+
+/**
+ * 确保调试库可用：已初始化直接复用，否则按给定文件建库建表。
+ *
+ * 用途是「自愈」：`data/debug.db` 被手工删掉、连接被提前关闭（测试 teardown、
+ * 脚本里调用 `closeDatabase()`）之后，下一次读写会重新创建，而不是静默不命中。
+ */
+export function ensureDebugDatabase(file: string): DebugDatabaseContext {
+  return context ?? initDebugDatabase(file)
+}
+
+/** 取最近一次初始化用的文件路径；进程内从未初始化时为 undefined。 */
+export function lastDebugDatabaseFile(): string | undefined {
+  return lastFile
 }
 
 /** 调试库是否已初始化。未初始化时采集流程应直接跳过命中查询。 */

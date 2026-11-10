@@ -8,6 +8,14 @@ data/
 coverage/
 *.tsbuildinfo
 
+# SQLite 数据库文件一律不入库（业务库、调试库 debug.db、WAL 附属文件）
+# 运行时会自动创建缺失的库文件，因此仓库里不需要任何 .db 样例
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
 # 本地冒烟产物（截图、临时数据库）
 tmp/
 .workbuddy

@@ -187,7 +187,7 @@ pnpm --filter @webcrawler/core demo:crawl
 | `HOST` | `127.0.0.1` | 监听地址 |
 | `PORT` | `3000` | 监听端口 |
 | `DATABASE_FILE` | `<cwd>/data/webcrawler.db` | SQLite 文件，父目录自动创建 |
-| `DEBUG_DATABASE_FILE` | `<cwd>/data/debug.db` | **调试数据独立库**：按网址存档响应原文，采集 / 测试命中即直接返回，不访问目标站点 |
+| `DEBUG_DATABASE_FILE` | `<cwd>/data/debug.db` | **调试数据独立库**：按网址存档响应原文，采集 / 测试命中即直接返回，不访问目标站点；启动时缺失会自动建库建表（该文件不入库） |
 | `DEBUG_CAPTURE_PROFILE_DIR` | `<cwd>/data/capture-profile` | 捕获浏览器的 Chromium 用户目录（登录态 / Cookie 持久化），删掉即回到干净浏览器 |
 | `CORS_ORIGIN` | `*` | `*` 或逗号分隔来源白名单 |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
@@ -533,6 +533,8 @@ running ──▶ cancelled
 「调试数据」是**按网址存档的响应原文**，存在独立的 `data/debug.db`（`debug_sample` 表，字段：`url` / `raw` / `statusCode` / `contentType` / `note` / `enabled` / `hitCount`），和业务库完全分开——随时可以整库删掉重建，不影响站点、任务与文章。
 
 - **匹配规则**：采集任务与规则测试器在发请求前先查这里，网址**完全相等**（含协议与查询参数）且记录为「启用」时，直接把 `raw` 交给解析管道，不发任何网络请求；浏览器模式下也不会启动浏览器（测试器与规则试抓会提前跳过 launch）。
+- **不用手工建库**：服务启动时检查 `data/debug.db`，文件或父目录缺失就自动创建 `debug_sample` 表与索引；运行中连接被关闭（测试 teardown、脚本里 `closeDatabase()`）或库文件被删掉，下一次读写会按原路径重建，接口不会 500、命中也不会静默失效。
+- **不入库**：`.gitignore` 已忽略 `*.db` / `*.db-shm` / `*.db-wal`（`data/`、`tmp/` 同样忽略），业务库与调试库都只留在本机，仓库里不放任何数据库文件。
 - **命中可观测**：命中后累加 `hitCount` 并记录 `lastHitAt`；测试器返回结果里的 `debug: true` 与「使用调试数据（未发网络请求）」提示都来自同一个判定。
 - **列表不返回 raw**：原文常常几百 KB，列表接口只给 `rawSize`（字节数）；查看 / 编辑时单独取详情。
 - **管理方式**：左侧「调试数据」页支持关键词（网址 / 备注）、类型（HTML / JSON）、启停筛选；新增 / 编辑（含状态码、原文类型、备注、启停）、查看原文并复制、单条删除、勾选批量删除与**按当前筛选条件批量删除**（与日志中心同一套语义：无条件的清空被拒绝）。

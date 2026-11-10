@@ -19,6 +19,8 @@ async function main(): Promise<void> {
     url: `http://${config.host}:${config.port}`,
     env: config.env,
     database: database.file,
+    // 调试库是独立文件：启动时缺失会自动创建，日志里给出实际路径便于排查
+    debugDatabase: config.debugDatabaseFile,
     schemaVersion: database.migrations.at(-1)?.id ?? 0,
     recoveredTasks: background.recovery.requeued.length,
     interruptedTasks: background.recovery.failed.length,

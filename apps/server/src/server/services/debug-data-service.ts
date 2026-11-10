@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import {
+  ensureDebugDatabase,
   getDebugDatabase,
   isDebugDatabaseInitialized,
+  lastDebugDatabaseFile,
   type Database,
 } from '../../database/index.js'
 import type {
@@ -10,6 +12,7 @@ import type {
   DebugSampleDto,
   PaginatedData,
 } from '../../shared/index.js'
+import { loadConfig } from '../config.js'
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js'
 import { keywordField, likePattern, paginationFields, runRawList, toPage } from '../lib/query.js'
 
@@ -186,8 +189,25 @@ function buildConditions(query: {
   return { conditions, params }
 }
 
+/**
+ * 取调试库连接，必要时就地创建。
+ *
+ * 正常启动由 `createApp` 建库；这里兜住两种「运行中库不见了」的情况：
+ * 连接被提前关闭（测试 teardown、脚本里 `closeDatabase()`），或运行前把
+ * `data/debug.db` 删了。此时按上次用的路径（没有则读配置）重新建库建表，
+ * 避免调试数据接口 500、采集命中静默失效。
+ */
 function db(): Database {
-  return getDebugDatabase()
+  if (isDebugDatabaseInitialized()) return getDebugDatabase()
+
+  // 优先按上次用过的路径重建：测试注入的 `:memory:` 也能原样复用
+  const known = lastDebugDatabaseFile()
+  if (known) return ensureDebugDatabase(known).db
+
+  const config = loadConfig()
+  // 测试环境不自动落盘：没初始化就用内存库，避免在仓库里留下 data/debug.db
+  if (config.env === 'test') return ensureDebugDatabase(':memory:').db
+  return ensureDebugDatabase(config.debugDatabaseFile).db
 }
 
 /* -------------------------------------------------------------------------- */
@@ -397,11 +417,10 @@ export interface DebugRawHit {
  * 这样命中次数的统计口径只有一处，不会被预检放大。
  */
 export function hasDebugRaw(url: string): boolean {
-  if (!isDebugDatabaseInitialized()) return false
   const key = url.trim()
   if (!key) return false
   try {
-    const row = getDebugDatabase()
+    const row = db()
       .prepare('SELECT 1 AS hit FROM debug_sample WHERE url = ? AND enabled = 1 LIMIT 1')
       .get(key)
     return Boolean(row)
@@ -420,12 +439,11 @@ export function hasDebugRaw(url: string): boolean {
  * - 命中后累加命中次数，供界面判断这条数据是否还在被使用。
  */
 export function lookupDebugRaw(url: string): DebugRawHit | null {
-  if (!isDebugDatabaseInitialized()) return null
   const key = url.trim()
   if (!key) return null
 
   try {
-    const database = getDebugDatabase()
+    const database = db()
     const row = database
       .prepare(
         'SELECT id, raw, statusCode, contentType FROM debug_sample WHERE url = ? AND enabled = 1 ORDER BY id DESC LIMIT 1',
