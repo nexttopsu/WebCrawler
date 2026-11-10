@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { CrawlRuleConfig, RuleDto, RuleSummaryDto, SiteDto } from '@webcrawler/shared'
 import { ElMessage } from 'element-plus'
 import { Download, Save, Upload } from '@lucide/vue'
@@ -65,18 +65,19 @@ watch(siteId, async (value) => {
 /* ------------------------------ 载入待编辑规则 ------------------------------ */
 
 /** 把从规则列表带过来的规则信息回填到保存面板，并锁定为「更新这条规则」。 */
-function applyLinkedRule(rule: RuleDto | null): void {
+async function applyLinkedRule(rule: RuleDto | null): Promise<void> {
   if (!rule) return
   ruleName.value = rule.name
   ruleDescription.value = rule.description ?? ''
   saveMode.value = 'update'
   updateTargetId.value = rule.id
-  if (siteId.value === rule.siteId) {
-    categoryId.value = rule.categoryId
-  } else {
+  if (siteId.value !== rule.siteId) {
     siteId.value = rule.siteId
-    categoryId.value = rule.categoryId
+    // watch(siteId) 会在站点变化时清空旧栏目，等它执行完再回填，
+    // 否则刚设置的 categoryId 会被 watcher 的 categoryId = null 覆盖掉
+    await nextTick()
   }
+  categoryId.value = rule.categoryId
 }
 
 watch(
@@ -198,7 +199,7 @@ function importJson(event: Event): void {
       <span class="linked__hint">保存后仍是这条规则</span>
     </div>
 
-    <div class="row">
+    <div class="row row-input">
       <label>
         <span>所属网站</span>
         <el-select v-model="siteId" placeholder="选择站点" filterable>
@@ -211,7 +212,7 @@ function importJson(event: Event): void {
       </label>
     </div>
 
-    <div class="row">
+    <div class="row row-input">
       <label>
         <span>规则名称</span>
         <el-input v-model="ruleName" placeholder="示例站新闻规则" />
@@ -243,12 +244,10 @@ function importJson(event: Event): void {
     </div>
 
     <div class="actions">
-      <el-button type="primary" :icon="Save" :loading="saving" :disabled="!canSave" @click="save">
+      <el-button :loading="validating" @click="validate">校验 Schema</el-button>
+        <el-button type="primary" :icon="Save" :loading="saving" :disabled="!canSave" @click="save">
         {{ rule ? '保存修改' : '保存规则' }}
       </el-button>
-      <el-button :loading="validating" @click="validate">校验 Schema</el-button>
-      <el-button :icon="Upload" @click="fileInputRef?.click()">导入 JSON</el-button>
-      <el-button :icon="Download" @click="exportJson">导出 JSON</el-button>
       <input ref="fileInputRef" type="file" accept=".json,application/json" hidden @change="importJson" />
     </div>
 
@@ -302,8 +301,17 @@ function importJson(event: Event): void {
   flex-wrap: wrap;
 }
 
+.row-input {
+  display: flex;
+  gap: 10px;
+}
+
+.row-input label {
+  flex: 1;
+  min-width: 0;
+}
+
 .row label {
-  flex: 1 1 140px;
   display: flex;
   flex-direction: column;
   gap: 4px;
