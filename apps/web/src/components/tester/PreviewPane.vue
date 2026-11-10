@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Eraser, RotateCcw } from '@lucide/vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
+import { Check, Copy, Eraser, RotateCcw } from '@lucide/vue'
 import { ElMessage } from 'element-plus'
 import { buildPreviewDocument } from '@/preview/preview-document'
 
@@ -71,6 +71,31 @@ function restoreExclude(): void {
 }
 
 const srcdoc = computed(() => buildPreviewDocument(displayHtml.value))
+
+/** 有没有可复制的内容：空 HTML 时按钮禁用 */
+const hasSource = computed(() => displayHtml.value.trim().length > 0)
+
+/** 复制反馈：短暂把图标与文案切成「已复制」 */
+const copied = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 复制当前视图的源码（开启排除后复制的是排除后的结果，与所见一致） */
+async function copySource(): Promise<void> {
+  if (!hasSource.value) return
+  try {
+    await navigator.clipboard.writeText(displayHtml.value)
+    copied.value = true
+    if (copiedTimer) clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => (copied.value = false), 1600)
+    ElMessage.success(`已复制源码（${displayHtml.value.length.toLocaleString()} 字符）`)
+  } catch {
+    ElMessage.warning('浏览器拒绝了剪贴板访问，可在「查看 HTML」中手动选择复制')
+  }
+}
+
+onBeforeUnmount(() => {
+  if (copiedTimer) clearTimeout(copiedTimer)
+})
 </script>
 
 <template>
@@ -101,6 +126,14 @@ const srcdoc = computed(() => buildPreviewDocument(displayHtml.value))
             @click="restoreExclude"
           >
             还原
+          </el-button>
+          <el-button
+            :icon="copied ? Check : Copy"
+            :disabled="!hasSource"
+            :title="hasSource ? '复制当前显示的源码（已开启排除时为排除后的结果）' : '暂无内容，先加载页面'"
+            @click="copySource"
+          >
+            复制
           </el-button>
         </el-button-group>
         <el-radio-group v-model="viewMode">

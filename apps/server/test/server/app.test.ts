@@ -10,7 +10,7 @@ let app: H3
 beforeAll(() => {
   initDatabase({ file: ':memory:' })
   app = createApp({
-    config: { ...loadConfig({}), logLevel: 'error' },
+    config: { ...loadConfig({}), logLevel: 'error', debugDatabaseFile: ':memory:' },
     logger: createLogger('error'),
   })
 })

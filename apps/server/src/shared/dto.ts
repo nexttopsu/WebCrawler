@@ -169,6 +169,8 @@ export interface CategoryTestDto {
   statusCode: number | null
   elapsedMs: number
   mode: 'http' | 'browser'
+  /** 列表页内容来自调试数据（网址完全匹配，未发真实请求） */
+  debug?: boolean
   /** 列表项命中数量 */
   itemCount: number
   linkCount: number

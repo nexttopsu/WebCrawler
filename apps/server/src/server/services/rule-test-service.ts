@@ -2,6 +2,7 @@ import type { CategoryRow, CrawlRuleRow, SiteRow } from '../../database/index.js
 import { CrawlEngine, ParserError } from '../../core/index.js'
 import type { PluginRegistry } from '../../plugin-system/index.js'
 import { createFlowPluginRunner, createParserPluginRunner } from './task-executor.js'
+import { getSettings } from './settings-service.js'
 import {
   createBrowserClient,
   RequestError,
@@ -19,6 +20,7 @@ import {
   resolveBaseUrl,
 } from './common.js'
 import { resolveEffectiveRule } from './rule-service.js'
+import { hasDebugRaw, lookupDebugRaw } from './debug-data-service.js'
 
 /** 测试运行时依赖：统一请求客户端与 SSRF 策略。 */
 export interface TestRuntime {
@@ -121,8 +123,11 @@ async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promis
   }
 
   let browser: BrowserClient | null = null
-  if (mode === 'browser') {
+  // 调试数据命中时不需要浏览器：不 launch 就不会因为缺 Chromium 而失败
+  if (mode === 'browser' && !hasDebugRaw(target.listUrl)) {
     browser = createBrowserClient({
+      // 规则试抓也跟随系统设置，避免设置页关闭无头后测试仍以无头启动
+      headless: getSettings().browserHeadless,
       ssrf: { allowPrivateNetwork: runtime.allowPrivateNetwork },
       timeoutMs: config.browser?.timeoutMs ?? TEST_TIMEOUT_MS,
     })
@@ -131,6 +136,8 @@ async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promis
   const engine = new CrawlEngine({
     request: runtime.request,
     browser,
+    // 调试数据优先：网址完全匹配时直接用存档 raw，不发请求
+    debugSource: lookupDebugRaw,
     parserPluginRunner: runtime.pluginRegistry
       ? createParserPluginRunner(runtime.pluginRegistry, runtime.request)
       : undefined,
@@ -155,13 +162,15 @@ async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promis
       statusCode: page.status,
       elapsedMs: page.elapsedMs,
       mode: page.mode,
+      debug: page.debug === true,
       itemCount: page.itemCount,
       linkCount: page.links.length,
       links: preview,
       message:
-        page.itemCount === 0
+        (page.debug ? '使用调试数据（未发网络请求）；' : '') +
+        (page.itemCount === 0
           ? '列表没有命中任何节点，请检查 itemSelector 或列表插件'
-          : `命中 ${page.itemCount} 个列表项，提取 ${page.links.length} 条链接`,
+          : `命中 ${page.itemCount} 个列表项，提取 ${page.links.length} 条链接`),
     }
   } catch (error) {
     if (error instanceof AppError) throw error
@@ -174,6 +183,7 @@ async function runListTest(target: ListTestTarget, runtime: TestRuntime): Promis
       statusCode: null,
       elapsedMs: Math.round(performance.now() - startedAt),
       mode,
+      debug: false,
       itemCount: 0,
       linkCount: 0,
       links: [],

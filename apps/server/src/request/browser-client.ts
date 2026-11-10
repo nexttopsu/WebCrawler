@@ -299,7 +299,13 @@ export class BrowserClient {
   }
 }
 
-/** 创建浏览器客户端。 */
+/**
+ * 创建浏览器客户端。
+ *
+ * 注意：不传 `headless` 时固定为 true。server 层的调用方（正式任务、规则试抓、
+ * 可视化测试器）必须显式传入 `getSettings().browserHeadless`，否则系统设置里的
+ * 「浏览器无头模式」开关对该路径不起作用。
+ */
 export function createBrowserClient(options: BrowserClientOptions = {}): BrowserClient {
   return new BrowserClient(options)
 }

@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowLeftRight,
   Braces,
+  Bug,
   FileText,
   FlaskConical,
   FolderTree,
@@ -30,7 +31,7 @@ export interface NavGroup {
 /**
  * 一级导航。
  *
- * 顺序与任务书一致：仪表盘 → 站点 → 栏目 → 规则 → 测试器 → 任务 → 文章 → 代理 → 插件 → 日志 → 设置。
+ * 顺序与任务书一致：仪表盘 → 站点 → 栏目 → 规则 → 测试器 → 任务 → 文章 → 日志 → 调试数据 → 代理 → 插件 → 设置。
  * 分组只影响视觉层次，不影响权限（本版本没有权限体系）。
  */
 export const navigation: NavItem[] = [
@@ -42,6 +43,7 @@ export const navigation: NavItem[] = [
   { label: '采集任务', icon: Activity, to: '/tasks', group: '运行监控' },
   { label: '文章数据', icon: FileText, to: '/articles', group: '运行监控' },
   { label: '日志中心', icon: ScrollText, to: '/logs', group: '运行监控' },
+  { label: '调试数据', icon: Bug, to: '/debug-data', group: '运行监控' },
   { label: '代理管理', icon: ArrowLeftRight, to: '/proxies', group: '系统资源' },
   { label: '插件管理', icon: Puzzle, to: '/plugins', group: '系统资源' },
   { label: '系统设置', icon: Settings, to: '/settings', group: '系统资源' },

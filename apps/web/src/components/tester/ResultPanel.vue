@@ -10,6 +10,8 @@ const props = defineProps<{
     statusCode: number | null
     elapsedMs: number | null
     mode: string
+    /** 内容来自调试数据时不再标注为真实请求 */
+    debug?: boolean
   } | null
   /** 最近一次测试的完整 JSON 载荷 */
   payload: unknown
@@ -71,6 +73,10 @@ async function copyJson(): Promise<void> {
           <dd>{{ request.elapsedMs != null ? `${request.elapsedMs} ms` : '—' }}</dd>
           <dt>模式</dt>
           <dd>{{ request.mode }}</dd>
+          <dt>数据来源</dt>
+          <dd :class="{ 'is-debug': request.debug }">
+            {{ request.debug ? '调试数据（未发网络请求）' : '实时请求' }}
+          </dd>
         </dl>
       </template>
       <p v-else class="empty">尚未发起请求。</p>
@@ -165,6 +171,10 @@ async function copyJson(): Promise<void> {
 
 .request-view dd.is-bad {
   color: var(--wb-danger);
+}
+
+.request-view dd.is-debug {
+  color: var(--wb-warning);
 }
 
 .empty {

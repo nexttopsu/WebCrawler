@@ -99,7 +99,7 @@ describe('SSRF 防护', () => {
     // 复用同一个数据库，只换一个「严格 SSRF」的应用实例，
     // 避免反复 init/close 数据库影响同一文件中的其它用例。
     const strictApp = createApp({
-      config: { ...loadConfig({}), logLevel: 'error', allowPrivateNetwork: false },
+      config: { ...loadConfig({}), logLevel: 'error', allowPrivateNetwork: false, debugDatabaseFile: ':memory:' },
       logger: createLogger('error'),
     })
 
@@ -182,6 +182,30 @@ describe('POST /api/tester/list', () => {
     expect(data.links[0]).toMatchObject({
       title: '第一篇报道：城市更新',
       articleTime: '2026-01-01 09:00',
+    })
+  })
+
+  it('itemSelector 直接指向链接时，字段 Selector 留空即取该链接节点', async () => {
+    const response = await call(app, '/api/tester/list', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: `${fixture.origin}/news`,
+        list: {
+          itemSelector: '.news-item a.title',
+          fields: {
+            url: { type: 'attr', attribute: 'href', required: true },
+            title: { type: 'text', required: true },
+          },
+        },
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = response.body.data
+    expect(data.ok).toBe(true)
+    expect(data.links[0]).toMatchObject({
+      url: `${fixture.origin}/article/1`,
+      title: '第一篇报道：城市更新',
     })
   })
 
@@ -274,6 +298,23 @@ describe('POST /api/tester/detail', () => {
     expect(data.fields.find((field: any) => field.key === 'title').ok).toBe(false)
   })
 
+  it('详情只配 content 也能出文章（标题回退页面标题）', async () => {
+    const response = await call(app, '/api/tester/detail', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: `${fixture.origin}/article/1`,
+        fields: { content: { type: 'html', selector: '.article-content', required: true } },
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = response.body.data
+    expect(data.ok).toBe(true)
+    expect(data.article.title).toBeTruthy()
+    expect(data.article.content).toBeTruthy()
+    expect(data.errors).toEqual([])
+  })
+
   it('空字段映射返回 400', async () => {
     const response = await call(app, '/api/tester/detail', {
       method: 'POST',
@@ -361,7 +402,7 @@ describe('测试器：全流程插件', () => {
   beforeAll(() => {
     // 注入注册表时由测试自己决定注册什么：createApp 不会自动注册内置插件
     pluginApp = createApp({
-      config: { ...loadConfig({}), logLevel: 'error', allowPrivateNetwork: true, proxySecretKey: 'test-secret-key-0123456789' },
+      config: { ...loadConfig({}), logLevel: 'error', allowPrivateNetwork: true, proxySecretKey: 'test-secret-key-0123456789', debugDatabaseFile: ':memory:' },
       logger: createLogger('error'),
       plugins: registry,
     })

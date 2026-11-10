@@ -1,4 +1,5 @@
 import { H3, setHeader } from 'h3'
+import { initDebugDatabase } from '../database/index.js'
 import { createPluginRegistry, type PluginRegistry } from '../plugin-system/index.js'
 import { createRequestClient, type RequestClient } from '../request/index.js'
 import { createAppRuntime, type AppRuntime } from './app-runtime.js'
@@ -19,6 +20,7 @@ import { proxyRoutes } from './routes/proxies.js'
 import { taskRoutes } from './routes/tasks.js'
 import { articleRoutes } from './routes/articles.js'
 import { logRoutes } from './routes/logs.js'
+import { debugDataRoutes } from './routes/debug-data.js'
 import { openRoutes } from './routes/open.js'
 import { scheduleRoutes } from './routes/schedules.js'
 import { pluginRoutes } from './routes/plugins.js'
@@ -75,6 +77,10 @@ export function createApp(options: CreateAppOptions = {}): H3 {
 
   const app = new H3({ debug: !isProduction })
 
+  // 调试数据是独立库（默认 data/debug.db）：这里只负责打开连接与建表，
+  // 采集 / 测试命中与否由引擎通过 debug-data-service 查询。
+  initDebugDatabase(config.debugDatabaseFile)
+
   app.use(createErrorHandler(logger, isProduction))
   app.use(createRequestLogger(logger))
   app.use(createCorsMiddleware(config.corsOrigins))
@@ -113,6 +119,7 @@ export function createApp(options: CreateAppOptions = {}): H3 {
     ...taskRoutes(serviceDeps),
     ...articleRoutes(serviceDeps),
     ...logRoutes(serviceDeps),
+    ...debugDataRoutes(serviceDeps),
     ...scheduleRoutes(serviceDeps),
     ...proxyRoutes(serviceDeps),
     ...pluginRoutes(serviceDeps, registry),

@@ -12,7 +12,7 @@ const props = defineProps<{
   subtitle?: string
   /** 内置字段预设；缺省为列表 / 详情共用的文章字段 */
   builtIns?: FieldPreset[]
-  /** 这些 key 的字段自动必填（列表 title / url、详情 title / content），不可勾选 */
+  /** 这些 key 的字段自动必填（列表 title / url、详情 content），不可勾选 */
   requiredKeys?: readonly string[]
 }>()
 
@@ -42,7 +42,7 @@ function isRequired(preset: FieldPreset): boolean {
   return fieldIsRequired(preset.key)
 }
 
-/** 必填由字段 key 决定（列表 title / url、详情 title / content），与勾选无关。 */
+/** 必填由字段 key 决定（列表 title / url、详情 content），与勾选无关。 */
 function fieldIsRequired(key: string): boolean {
   return (props.requiredKeys ?? []).includes(key)
 }
@@ -162,7 +162,8 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
           </template>
           <label class="span-2">
             <span>Selector</span>
-            <el-input v-model="field.selector" placeholder=".article-title" />
+            <el-input v-model="field.selector" placeholder=".article-title（可留空）" />
+            <em class="field-note">留空 = 取当前节点（列表项 / 对象节点本身）。</em>
           </label>
           <label>
             <span>提取类型</span>
@@ -257,6 +258,17 @@ const availableBuiltIns = (): Array<{ key: string; label: string }> =>
 
 .field-grid .span-2 {
   grid-column: 1 / -1;
+}
+
+.field-note {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--wb-text-muted);
+}
+
+.field-note code {
+  color: var(--wb-primary);
 }
 
 .switches {

@@ -187,6 +187,8 @@ pnpm --filter @webcrawler/core demo:crawl
 | `HOST` | `127.0.0.1` | 监听地址 |
 | `PORT` | `3000` | 监听端口 |
 | `DATABASE_FILE` | `<cwd>/data/webcrawler.db` | SQLite 文件，父目录自动创建 |
+| `DEBUG_DATABASE_FILE` | `<cwd>/data/debug.db` | **调试数据独立库**：按网址存档响应原文，采集 / 测试命中即直接返回，不访问目标站点 |
+| `DEBUG_CAPTURE_PROFILE_DIR` | `<cwd>/data/capture-profile` | 捕获浏览器的 Chromium 用户目录（登录态 / Cookie 持久化），删掉即回到干净浏览器 |
 | `CORS_ORIGIN` | `*` | `*` 或逗号分隔来源白名单 |
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `NODE_ENV` | `development` | `production` 时隐藏 500 的原始错误信息 |
@@ -260,6 +262,12 @@ pnpm --filter @webcrawler/core demo:crawl
 | POST | `/api/articles/batch-delete` | 批量删除（单次最多 100 条，返回 `deleted` 与 `missing`） |
 | POST | `/api/articles/collect-detail` | 详情补采：按 `ids` 或筛选条件提交，按「站点 + 栏目」拆成 `detail` 任务，返回 `articleCount` / `tasks` |
 | GET | `/api/logs` | 任务日志（`taskId`/`siteId`/`categoryId`/`level`/`stage`/`keyword`/`from`/`to`），写入时已脱敏 |
+| GET / POST | `/api/debug-data` | 调试数据列表（`keyword`/`contentType`/`enabled`，**不返回 raw**，只给 `rawSize`）/ 新增（同一网址唯一，重复 409） |
+| GET / PUT / DELETE | `/api/debug-data/:id` | 详情（含 raw）、编辑、单条删除 |
+| DELETE | `/api/debug-data` | 批量删除：`ids=1,2,3` 或按筛选条件（至少一个条件，否则 400） |
+| GET | `/api/debug-data/capture/status` | 捕获浏览器状态：`running` / `stopped`、本次统计与最近 20 条捕获（前端 2s 轮询） |
+| POST | `/api/debug-data/capture/start` | 启动捕获浏览器，`startUrl` / `includeJson` / `headless` 均可选；已有一个会话时 409 |
+| POST | `/api/debug-data/capture/stop` | 停止捕获浏览器（幂等），返回本次会话统计 |
 | GET / POST | `/api/schedules` | 定时任务列表（`siteId`/`enabled`）/ 新建（`hourly`/`daily`/`weekly`/`cron` + 时区） |
 | GET / PUT / PATCH / DELETE | `/api/schedules/:id` | 详情、替换、局部更新（改小时会自动重算 cron 与 `nextRunAt`）、删除 |
 | PATCH | `/api/schedules/:id/status` | 启用 / 停用（同时增删 croner 作业） |
@@ -285,8 +293,7 @@ pnpm --filter @webcrawler/core demo:crawl
   "pagination": { "type": "query", "parameter": "page", "start": 1 },
   "detail": {
     "fields": {
-      "title": { "type": "text", "selector": "h1", "required": true },
-      "content": { "type": "html", "selector": ".article-content" },
+      "content": { "type": "html", "selector": ".article-content", "required": true },
       "images": { "type": "attr", "selector": "img", "attribute": "src", "multiple": true },
       "cover": { "type": "attr", "selector": ".article-cover img", "attribute": "src" },
       "author": { "type": "text", "selector": ".author", "defaultValue": "佚名" }
@@ -300,12 +307,16 @@ pnpm --filter @webcrawler/core demo:crawl
 
 - `type`：`text` / `html` / `attr` / `list` / `object`；`list`/`object` 可无限嵌套字段映射。
 - `jsonPath`：JSON 响应使用，如 `data.items[*].url`。
+- `selector` **可以留空**：留空表示取「当前作用域节点」本身（与 request-pack 一致）。最常用在列表项上——
+  `list.itemSelector` 直接写成 `.list a` 时，`url` 字段留空 + `attribute: "href"` 取的就是这个 `a` 的链接，
+  `title` 留空则取它的文字。详情页是文档根作用域、没有「当前节点」，那里留空会在提取时报错。
 - `required` / `defaultValue` / `multiple` / `clean`：必填、兜底、多值与字段级清洗。
 - 标准字段：`title` / `url` / `author` / `summary` / `content` / `coverUrl` / `articleTime`——列表规则与详情规则共用同一套内置字段；
   其余字段名进入文章的 `extra` 扩展 JSON。封面图是**预留字段且允许为空**：规则没映射、页面没有或地址不是 http(s) 时为 `null`。
   旧规则里的 `cover` / `publishTime` 仍可读取，分别等价于 `coverUrl` / `articleTime`。
 - 字段名需匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$`，嵌套深度上限 8 层（防止递归爆栈）。
 - `detail.fields` 与顶层 `fields` 不允许同时出现；`request.mode=http` 与 `browser.enabled=true` 互斥，冲突时报错而不是「后者静默生效」。
+- 详情规则只有 `content` 必须保证能取到（标 `required: true` 或配 `validate.minContentLength`）。标题按「详情页 `title` 字段 > 列表阶段标题 > 页面 `<title>` / 首个 `<h1>`」自动继承，所以详情只需配置正文选择器；列表规则的 `title` / `url` 仍由 Schema 强制必填。显式配置了 `title` 字段却抽不到时不做页面标题兜底，仍按失败处理。
 
 ### 分页类型
 
@@ -517,6 +528,39 @@ running ──▶ cancelled
 - 结构化 `detail`：深度 6 层脱敏，命中 `password` / `secret` / `token` / `authorization` / `cookie` / `apiKey` 的键整体替换。
 - 文本：`Bearer xxx` 与 `password=xxx` 这类内联凭据被抹掉。
 
+### 调试数据（离线复现）
+
+「调试数据」是**按网址存档的响应原文**，存在独立的 `data/debug.db`（`debug_sample` 表，字段：`url` / `raw` / `statusCode` / `contentType` / `note` / `enabled` / `hitCount`），和业务库完全分开——随时可以整库删掉重建，不影响站点、任务与文章。
+
+- **匹配规则**：采集任务与规则测试器在发请求前先查这里，网址**完全相等**（含协议与查询参数）且记录为「启用」时，直接把 `raw` 交给解析管道，不发任何网络请求；浏览器模式下也不会启动浏览器（测试器与规则试抓会提前跳过 launch）。
+- **命中可观测**：命中后累加 `hitCount` 并记录 `lastHitAt`；测试器返回结果里的 `debug: true` 与「使用调试数据（未发网络请求）」提示都来自同一个判定。
+- **列表不返回 raw**：原文常常几百 KB，列表接口只给 `rawSize`（字节数）；查看 / 编辑时单独取详情。
+- **管理方式**：左侧「调试数据」页支持关键词（网址 / 备注）、类型（HTML / JSON）、启停筛选；新增 / 编辑（含状态码、原文类型、备注、启停）、查看原文并复制、单条删除、勾选批量删除与**按当前筛选条件批量删除**（与日志中心同一套语义：无条件的清空被拒绝）。
+- **用途**：站点改版 / 下线后继续调规则、离线复现线上解析问题、给自动化测试固定页面样本。
+
+### 捕获浏览器（现场攒调试数据）
+
+![捕获浏览器](docs/capture-browser.png)
+
+调试数据页右上角的「启动浏览器」由后端在**运行后端的机器**上打开一个 Playwright Chromium
+（默认有头），你在窗口里正常浏览，访问的每个网页都会实时写进 `debug_sample`：
+
+- 只记**主文档**，iframe / 图片 / 字体不入库；打开「记录接口」后额外记录主文档发起的 XHR / Fetch JSON；
+- 只记**状态码 200 / 304**：200 存原始字节；304 是缓存命中，正文由浏览器提供（协议层取不到时退回已渲染的 DOM 序列化）；
+  4xx / 5xx 错误页、3xx 跳转（没有正文）都不入库；
+- 同一个网址再次访问时**覆盖 raw**（不报 409），已有备注、启停状态与命中次数保留；
+- 编码按响应头 + HTML `meta` 嗅探（request-pack `detectCharset`），GBK 站点不会存成乱码；
+- PDF / 图片等二进制、空响应、超过 20 MB 的响应直接跳过；单次会话最多写入 1000 条；
+- 用户目录 `data/capture-profile` 持久化 Cookie 与登录态：抓需要登录的页面时，先在窗口里正常登录一次；
+- 关掉浏览器窗口即视为停止（后端监听 context close），也可以点「停止浏览器」；
+- 同一时刻只允许一个捕获会话，重复启动返回 409，不会顶掉用户正在用的窗口。
+
+页面顶部的状态条实时显示「已记录 N 个页面（新增 / 覆盖 / 跳过 / 失败）」与最近捕获，
+捕获数变化时自动刷新下方列表。停止后状态条保留本次会话的统计，刷新页面也能看到。
+
+> 捕获浏览器**不做 SSRF 限制**：它是管理员手动操作的浏览器（等同于在服务器上开浏览器），
+> 需要能访问内网 / 本机页面；它不参与采集任务的请求链路，任务也不会调用它。
+
 ## 数据库
 
 12 个模型：`Site`、`Category`、`CrawlRule`、`CrawlRuleVersion`、`CrawlTask`、`CrawlSchedule`、`CrawlLog`、`Article`、`Proxy`、`Plugin`、`CrawlError`、`SystemSetting`。
@@ -558,6 +602,7 @@ ORMlet 只接受 `TEXT` / `INTEGER` / `REAL` / `BLOB`，不支持 `NOT NULL`、`
 | `/proxies` | 代理管理 | 列表 / 新增 / 编辑 / 删除 / 启停 / 连通性测试 / 使用统计，密码只显示「已配置」 |
 | `/plugins` | 插件管理 | 内置插件列表（id / 类型 / 支持位置 / 源码位置）、详情、错误日志、启用停用 |
 | `/logs` | 日志中心 | 任务 / 网站 / 级别 / 阶段 / 时间 / 关键词筛选、展开详情、复制、跳转任务 |
+| `/debug-data` | 调试数据 | 按网址存档响应原文（网址 / 类型 / 启停筛选，列表不展示 raw）；新增 / 编辑 / 查看原文 / 启停 / 单删 / 勾选与筛选批量删除；采集与测试器网址完全匹配时直接返回 raw；「启动浏览器」现场浏览并把访问的网页自动入库 |
 | `/settings` | 系统设置 | 分组表单（请求 / 任务 / 浏览器 / 日志 / 系统）、生效方式标注、只读运行信息、脏值保存与撤销 |
 
 ### 设计体系
@@ -607,6 +652,8 @@ pnpm --filter @webcrawler/server start        # 或 node apps/server/dist/index.
 
 - `node:sqlite` 在 Node 22 仍为实验特性，启动会打印 `ExperimentalWarning`，不影响功能。
 - 浏览器模式需要先执行 `npx playwright install chromium`；未安装时返回 `BROWSER_ERROR` 并给出提示。
+- 捕获浏览器在**后端所在机器**上开窗口：后端跑在远程服务器 / Windows 服务（Session 0）时看不到界面，这时可勾选「无头模式」只加载起始网址；同一份用户目录同时只能被一个 Chromium 占用，异常退出后若提示目录被锁，删掉 `data/capture-profile` 即可。
+- 捕获只覆盖主文档（+ 可选接口 JSON），iframe 内容与图片 / 字体不入库；单次会话上限 1000 条，超出后只统计不再写入。
 - 分页器支持 `none` / `query` / `path` 的实际多页执行；`next`（跟随「下一页」链接）与 `cursor` 会明确抛 `PaginationError`，保存时即报错，不假装支持。规则测试器仍只抓入口页。
 - 规则版本目前是「全量快照」，未做增量 diff；版本数量随配置修改线性增长，清理策略留待后续。
 - 栏目 `code` 在站点内唯一、URL 在站点内唯一，跨站点允许重复（不同站点可以有同名栏目）。

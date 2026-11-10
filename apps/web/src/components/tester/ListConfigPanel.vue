@@ -43,7 +43,10 @@ function linkMeta(link: { author?: string | null; articleTime?: string | null; s
         placeholder=".news-item"
         @update:model-value="emit('update:itemSelector', $event)"
       />
-      <p class="tester-field__hint">列表里每篇文章重复出现的容器节点，例如 ul.list &gt; li.item。</p>
+      <p class="tester-field__hint">
+        列表里每篇文章重复出现的容器节点，例如 ul.list &gt; li.item。也可以直接指向链接本身（如
+        <code>.list a</code>）：此时字段的 Selector 留空，就表示取这个节点。
+      </p>
     </div>
     <p v-else class="plugin-note">
       列表由全流程插件整段返回，无需选择器与列表字段；分页方式在下方「高级设置」中配置。

@@ -26,6 +26,8 @@ export function startTestApp(options: TestAppOptions = {}): H3 {
     config: {
       ...loadConfig({}),
       logLevel: 'error',
+      // 调试数据用独立内存库：测试不会在仓库里留下 data/debug.db
+      debugDatabaseFile: ':memory:',
       allowPrivateNetwork: options.allowPrivateNetwork ?? false,
       proxySecretKey:
         options.proxySecretKey === undefined ? 'test-secret-key-0123456789' : options.proxySecretKey,

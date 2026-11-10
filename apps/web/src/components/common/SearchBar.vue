@@ -2,9 +2,12 @@
 /**
  * 搜索框：输入即搜（去抖 300ms）+ 回车立即搜 + 清空。
  * 受控组件，值由父级持有，便于把搜索词一起带进分页请求。
+ *
+ * 清空只用 el-input 自带的 clearable，不要再往 suffix 里塞 ✕：
+ * 那样输入内容后会同时出现自带的圆圈 ✕ 和自定义图标两个清除按钮。
  */
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { Search, X } from '@lucide/vue'
+import { Search } from '@lucide/vue'
 
 const props = withDefaults(
   defineProps<{
@@ -71,19 +74,5 @@ onBeforeUnmount(() => {
     <template #prefix>
       <Search :size="15" />
     </template>
-    <template v-if="inner" #suffix>
-      <X :size="14" class="search-clear" @click="clear" />
-    </template>
   </el-input>
 </template>
-
-<style scoped>
-.search-clear {
-  cursor: pointer;
-  color: var(--wb-text-muted);
-}
-
-.search-clear:hover {
-  color: var(--wb-text);
-}
-</style>

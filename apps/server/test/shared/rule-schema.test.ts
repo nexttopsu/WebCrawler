@@ -87,9 +87,16 @@ describe('规则 Schema', () => {
     expect(text).toContain('fields')
   })
 
-  it('文本字段缺少 selector 时报错', () => {
-    const text = errorText({ version: 1, detail: { fields: { title: { type: 'text' } } } })
-    expect(text).toContain('selector')
+  it('字段 selector 允许留空（留空表示取当前节点）', () => {
+    expect(() =>
+      parseRuleConfig({ version: 1, detail: { fields: { title: { type: 'text' } } } }),
+    ).not.toThrow()
+    expect(() =>
+      parseRuleConfig({
+        version: 1,
+        detail: { fields: { url: { type: 'attr', selector: '', attribute: 'href' } } },
+      }),
+    ).not.toThrow()
   })
 
   it('字段名必须是标识符', () => {

@@ -178,6 +178,38 @@ describe('数据管道：校验与失败处理', () => {
   })
 })
 
+describe('详情标题继承（详情规则只需 content）', () => {
+  const contentOnly: Record<string, FieldRule> = {
+    content: { type: 'html', selector: '.article-content', required: true },
+  }
+
+  it('只配 content 时标题继承列表标题', async () => {
+    const result = await runPipeline({ ...baseInput, fields: contentOnly, listTitle: '列表页标题' })
+    expect(result.article?.title).toBe('列表页标题')
+    expect(result.errors).toEqual([])
+  })
+
+  it('没有列表标题时回退页面 title 标签', async () => {
+    const result = await runPipeline({ ...baseInput, fields: contentOnly })
+    expect(result.article?.title).toBe('第一篇报道 - 示例站')
+    expect(result.errors).toEqual([])
+  })
+
+  it('详情页配置了 title 字段时优先用详情页标题', async () => {
+    const result = await runPipeline({ ...baseInput, listTitle: '列表页标题' })
+    expect(result.article?.title).toBe('第一篇报道：采集平台上线')
+  })
+
+  it('显式配置 title 却抽不到时不做页面标题兜底', async () => {
+    const result = await runPipeline({
+      ...baseInput,
+      fields: { ...contentOnly, title: { type: 'text', selector: '.not-exist' } },
+    })
+    expect(result.article).toBeNull()
+    expect(result.errors).toContain('缺少标题')
+  })
+})
+
 describe('数据管道：JSON 响应', () => {
   it('按 jsonPath 提取文章', async () => {
     const body = JSON.stringify({

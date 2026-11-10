@@ -90,6 +90,25 @@ describe('字段提取：必填、默认值与嵌套', () => {
     expect(result.data.meta).toEqual({ author: '张三', publishTime: '2026-01-01 10:00' })
   })
 
+  it('列表项容器直接指向链接时，字段 selector 留空取当前节点', () => {
+    const items = parser.extractList(listHtml, '.news-item a.title', {
+      url: { type: 'attr', attribute: 'href' },
+      title: { type: 'text' },
+    })
+
+    expect(items).toHaveLength(4)
+    expect(items[0]).toEqual({ url: '/news/1.html', title: '第一篇报道' })
+    expect(items[1]?.url).toContain('/news/2.html')
+  })
+
+  it('文档根作用域留空 selector 时给出明确错误（没有当前节点）', () => {
+    const result = parser.extractFields(detailHtml, {
+      title: { type: 'text', selector: '', required: true },
+    })
+    expect(result.data.title).toBeUndefined()
+    expect(result.errors.join(' ')).toContain('当前节点')
+  })
+
   it('字段规则不合法时在加载阶段直接报错', () => {
     expect(() => parser.extractFields(detailHtml, { cover: { type: 'attr' } })).toThrow(ParserError)
     expect(() =>

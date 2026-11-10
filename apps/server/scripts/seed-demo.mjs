@@ -49,7 +49,8 @@ const RULE = {
     },
   },
   clean: { removeSelectors: ['.ad'] },
-  validate: { requiredFields: ['title', 'content'], minTitleLength: 2 },
+  // 详情只需 content 必填；标题优先取详情页 title 字段，抽不到时继承列表标题
+  validate: { requiredFields: ['content'], minTitleLength: 2 },
 }
 
 async function main() {

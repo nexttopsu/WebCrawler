@@ -52,6 +52,18 @@ export function stripElements(html: string, selectors: readonly string[]): strin
   }
 }
 
+/**
+ * selector 是否留空。
+ *
+ * 本函数处理的是**整篇 HTML**（详情页根作用域），这里没有 request-pack 意义上的
+ * 「当前节点」：request-pack 会把空选择器当成文档本身（text 取整页文本），
+ * 对详情字段来说是明显的配置错误。这类字段改走内置提取器，由它给出
+ * 「文档根作用域没有当前节点」的明确诊断；列表项内的空选择器不受影响。
+ */
+function hasEmptySelector(rule: FieldRule): boolean {
+  return !rule.jsonPath && !rule.selector?.trim()
+}
+
 /** 判断字段能否编译成 request-pack schema（CSS + 内置组合器可表达的子集）。 */
 function isRpCompatible(rule: FieldRule): boolean {
   if (rule.jsonPath) return false
@@ -186,7 +198,7 @@ export function extractFieldsViaHtml2Object(
   const rpRules: Record<string, FieldRule> = {}
   const legacyRules: Record<string, FieldRule> = {}
   for (const [key, rule] of Object.entries(rules)) {
-    if (isRpCompatible(rule)) rpRules[key] = rule
+    if (isRpCompatible(rule) && !hasEmptySelector(rule)) rpRules[key] = rule
     else legacyRules[key] = rule
   }
 

@@ -96,10 +96,11 @@ function extractField(scope: ExtractScope, key: string, rule: FieldRule, require
     return fail(key, rule, `字段 "${key}" 使用了 jsonPath，但当前是 HTML 提取模式`)
   }
 
-  // 无选择器：作用于当前作用域节点自身
+  // 无选择器：作用于当前作用域节点自身（与 request-pack 一致）。
+  // 文档根作用域没有「当前节点」，detail 字段留空 selector 属于配置错误。
   if (!selector) {
     if (!('text' in scope)) {
-      const message = `字段 "${key}" 缺少 selector（在文档根作用域下必须指定选择器）`
+      const message = `字段 "${key}" 的 selector 留空只能在列表项 / 对象节点内使用（当前是文档根作用域，没有「当前节点」）`
       return fail(key, rule, message)
     }
 

@@ -14,6 +14,19 @@ export interface AppConfig {
   port: number
   /** SQLite 文件路径，支持相对路径（相对进程工作目录） */
   databaseFile: string
+  /**
+   * 调试数据专用库的文件路径。
+   *
+   * 与业务库分开：调试数据可以随时整库删除重建，不影响站点 / 任务 / 文章。
+   */
+  debugDatabaseFile: string
+  /**
+   * 捕获浏览器的用户数据目录（Chromium profile）。
+   *
+   * 持久化目录让登录态 / Cookie 跨会话保留，才能抓到需要登录的页面；
+   * 删掉目录即回到干净的浏览器。
+   */
+  debugCaptureProfileDir: string
   /** CORS 允许的来源：`'*'` 或白名单 */
   corsOrigins: '*' | string[]
   logLevel: LogLevel
@@ -105,6 +118,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: env.HOST?.trim() || DEFAULT_HOST,
     port: parsePort(env.PORT),
     databaseFile: env.DATABASE_FILE?.trim() || resolve(process.cwd(), 'data', 'webcrawler.db'),
+    debugDatabaseFile:
+      env.DEBUG_DATABASE_FILE?.trim() || resolve(process.cwd(), 'data', 'debug.db'),
+    debugCaptureProfileDir:
+      env.DEBUG_CAPTURE_PROFILE_DIR?.trim() || resolve(process.cwd(), 'data', 'capture-profile'),
     corsOrigins: parseOrigins(env.CORS_ORIGIN),
     logLevel: parseLogLevel(env.LOG_LEVEL),
     allowPrivateNetwork: parseBoolean(env.ALLOW_PRIVATE_NETWORK),

@@ -20,7 +20,31 @@ export interface CrawlServices {
   parser: Parser
   /** 未配置浏览器时，browser 模式会明确报错，而不是静默降级 */
   browser: BrowserClient | null
+  /**
+   * 调试数据源：按网址精确查找存档的响应原文。
+   *
+   * 引擎不直接依赖数据库，由应用层注入实现（见 `debug-data-service.lookupDebugRaw`）。
+   * 返回 null 表示没有命中，继续走真实请求。
+   */
+  debug: DebugRawResolver | null
 }
+
+/** 调试数据命中结果：引擎拿到的「假响应」。 */
+export interface DebugRawHit {
+  /** 响应原文 */
+  raw: string
+  statusCode: number
+  /** 原文类型：json 时管道按 JSON 解析 */
+  contentType?: 'html' | 'json'
+}
+
+/**
+ * 调试数据查找函数。
+ *
+ * 命中条件由实现方保证（本项目是「网址完全相等且启用」）；
+ * 引擎只负责「命中就不再发请求」。
+ */
+export type DebugRawResolver = (url: string) => DebugRawHit | null
 
 /**
  * 解析器插件执行器：按规则 `parserPlugins` 顺序对提取结果做重格式化。
@@ -60,6 +84,8 @@ export interface CrawlEngineOptions {
   parserPluginRunner?: ParserPluginRunner
   /** 全流程插件执行器；规则未配置 list.plugin / detail.plugin 时不会被调用 */
   flowPluginRunner?: FlowPluginRunner
+  /** 调试数据源；不传则不启用调试命中 */
+  debugSource?: DebugRawResolver | null
 }
 
 /** 一次页面抓取的结果。 */
@@ -69,6 +95,10 @@ export interface FetchedPage {
   status: number
   mode: RequestMode
   elapsedMs: number
+  /** 是否来自调试数据（为 true 时表示没有发起真实网络请求） */
+  debug?: boolean
+  /** 调试数据的原文类型；真实请求不设置，管道按 HTML 处理 */
+  contentType?: 'html' | 'json'
 }
 
 /** 给插件用的抓取结果：不暴露 mode / elapsedMs，避免插件依赖内部字段。 */
@@ -105,6 +135,8 @@ export interface ListPageResult {
   status: number
   mode: RequestMode
   elapsedMs: number
+  /** 页面内容来自调试数据（未发真实请求） */
+  debug?: boolean
 }
 
 /** 采集过程中的错误记录。 */
@@ -165,6 +197,7 @@ export class CrawlEngine {
       request: options.request,
       parser: options.parser ?? createParser(),
       browser: options.browser ?? null,
+      debug: options.debugSource ?? null,
     }
     this.parserPluginRunner = options.parserPluginRunner ?? null
     this.flowPluginRunner = options.flowPluginRunner ?? null
@@ -196,6 +229,23 @@ export class CrawlEngine {
 
     const mode = this.resolveMode(context)
     const startedAt = performance.now()
+
+    // 调试数据优先：网址完全相等时直接返回存档原文，不发任何网络请求。
+    // 放在模式判断之前，浏览器模式下也无需启动浏览器（调用方还会据此提前跳过 launch）。
+    const debugHit = this.services.debug?.(url) ?? null
+    if (debugHit) {
+      return {
+        html: debugHit.raw,
+        finalUrl: url,
+        status: debugHit.statusCode,
+        // 数据不是浏览器渲染出来的，标记为 http 更贴近事实；debug 字段负责说明来源
+        mode,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        debug: true,
+        ...(debugHit.contentType ? { contentType: debugHit.contentType } : {}),
+      }
+    }
+
     const timeoutMs =
       context.requestOptions.timeoutMs ?? context.rule.config.request?.timeoutMs ?? 15_000
 
@@ -349,6 +399,7 @@ export class CrawlEngine {
       status: page.status,
       mode: page.mode,
       elapsedMs: page.elapsedMs,
+      ...(page.debug ? { debug: true } : {}),
     }
   }
 
@@ -565,6 +616,7 @@ export class CrawlEngine {
       status: page.status,
       mode: page.mode,
       elapsedMs: page.elapsedMs,
+      ...(page.debug ? { debug: true } : {}),
     }
   }
 
@@ -622,9 +674,12 @@ export class CrawlEngine {
         url: page.finalUrl,
         body,
         fields,
+        // 调试数据可以标成 json：管道据此按 JSON 解析，而不是当 HTML 处理
+        ...(page.contentType ? { contentType: page.contentType } : {}),
         clean: context.rule.config.clean,
         validate: context.rule.config.validate,
         listCoverUrl: link.coverUrl,
+        listTitle: link.title,
         metadata: {
           sourceUrl: link.sourceUrl,
           ...(link.title ? { listTitle: link.title } : {}),
@@ -677,7 +732,7 @@ export class CrawlEngine {
             stage: 'output',
             ok: article !== null,
             durationMs: elapsedMs,
-            detail: article ? `详情插件 ${pluginId}` : `详情插件 ${pluginId} 未返回标题`,
+            detail: article ? `详情插件 ${pluginId}` : `详情插件 ${pluginId} 未返回标题且列表标题为空`,
           },
         ],
       },
@@ -691,13 +746,14 @@ export class CrawlEngine {
     }
   }
 
-  /** 详情插件返回值 → ArticleData；标题为空时返回 null（与管道的校验一致）。 */
+  /** 详情插件返回值 → ArticleData；插件与列表都没给标题时返回 null（与管道的校验一致）。 */
   private articleFromPlugin(
     record: Record<string, unknown>,
     link: ArticleLink,
     context: CrawlContext,
   ): ArticleData | null {
-    const title = asText(record.title)
+    // 与字段映射路径一致：详情只需产出 content，标题优先取插件返回值，否则继承列表标题
+    const title = asText(record.title) || (link.title ?? '').trim()
     if (!title) return null
 
     // 地址始终用列表链接：插件返回的规范地址只作参考，覆盖会让同 URL 去重失效

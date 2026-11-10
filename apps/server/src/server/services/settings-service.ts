@@ -131,7 +131,8 @@ const DEFINITIONS: Definition[] = [
     group: 'browser',
     control: 'switch',
     effect: 'immediate',
-    description: '浏览器模式采集与测试是否以无头方式启动；关闭后需要图形环境。',
+    description:
+      '采集任务、规则试抓与页面快照的浏览器模式是否以无头方式启动；关闭后需要图形环境，且只对之后启动的浏览器生效（已运行任务不会切换）。',
   },
   {
     key: SETTING_KEYS.logLevel,
@@ -486,6 +487,8 @@ export function applySettings(values: SettingValues, context: ApplyContext): str
     applied.push(SETTING_KEYS.logRetentionDays)
   }
 
+  // 时区、默认代理、无头模式没有独立的运行时对象可写：调用方每次都实时读
+  // `getSettings()`（保存时已失效缓存），因此对之后启动的浏览器即时生效。
   applied.push(SETTING_KEYS.timeZone, SETTING_KEYS.defaultProxyId, SETTING_KEYS.browserHeadless)
   return applied
 }

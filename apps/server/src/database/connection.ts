@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { Database } from 'ormlet'
+import { closeDebugDatabase } from './debug.js'
 import { defineModels, type DatabaseModels } from './models/index.js'
 import { getAppliedMigrations, runMigrations, type AppliedMigration } from './migrations/index.js'
 
@@ -87,6 +88,8 @@ export function isDatabaseInitialized(): boolean {
 
 /** 关闭连接并释放单例，主要供测试与进程退出使用。可重复调用。 */
 export function closeDatabase(): void {
+  // 调试库是独立连接，跟着进程一起关闭：停机与测试清理都不会漏掉它
+  closeDebugDatabase()
   if (!context) return
   context.db.close()
   context = undefined

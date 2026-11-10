@@ -42,7 +42,9 @@ export const LIST_REQUIRED_FIELD_KEYS: readonly string[] = ['title', 'url']
 /**
  * 详情规则的必填字段。
  *
- * 标 title：管道本身对「缺少标题」有硬校验；标 content：内容规则必须能抽到正文，
- * 抽不到就按失败处理。界面不提供「必填」勾选，由字段 key 自动决定。
+ * 只有 content：内容规则必须能抽到正文，抽不到就按失败处理。
+ * 标题不需要在详情页配置——管道按「详情页 title 字段 > 列表标题 > 页面自带标题」
+ * 自动继承，只有详情页显式配了 title 字段才以页面抽取结果为准。
+ * 界面不提供「必填」勾选，由字段 key 自动决定。
  */
-export const DETAIL_REQUIRED_FIELD_KEYS: readonly string[] = ['title', 'content']
+export const DETAIL_REQUIRED_FIELD_KEYS: readonly string[] = ['content']

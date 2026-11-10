@@ -491,6 +491,19 @@ describe('采集引擎：全流程插件', () => {
     expect(result.errors).toEqual(['缺少标题'])
   })
 
+  it('详情插件没返回标题时继承列表标题', async () => {
+    const registry = flowRegistry({ detail: async () => ({ author: '李四' }) })
+    const context = makeContext(makeRule({ detail: { plugin: 'demo-flow' } }))
+    const result = await pluginEngine(registry).parseDetail(context, {
+      url: `${origin}/news/1.html`,
+      sourceUrl: context.url,
+      title: '列表里的标题',
+    })
+
+    expect(result.article?.title).toBe('列表里的标题')
+    expect(result.errors).toEqual([])
+  })
+
   it('crawlCategory 走插件后能拿到链接与文章', async () => {
     const registry = flowRegistry({
       list: async () => [{ url: `${origin}/news/1.html`, title: '列表标题' }, { url: `${origin}/news/3.html` }],
@@ -502,5 +515,74 @@ describe('采集引擎：全流程插件', () => {
     expect(result.stats.linkCount).toBe(2)
     expect(result.articles.map((article) => article.title)).toEqual(['详情 1.html', '详情 3.html'])
     expect(result.errors).toEqual([])
+  })
+})
+
+describe('采集引擎：调试数据优先', () => {
+  /** 记录 request 是否被真正调用过：命中调试数据时必须是 0 次。 */
+  function countingRequest(): { client: RequestClient; calls: () => number } {
+    let calls = 0
+    const client = new Proxy(request, {
+      get(target, prop, receiver) {
+        if (prop === 'get') {
+          return (...args: Parameters<RequestClient['get']>) => {
+            calls += 1
+            return target.get(...args)
+          }
+        }
+        return Reflect.get(target, prop, receiver)
+      },
+    }) as RequestClient
+    return { client, calls: () => calls }
+  }
+
+  it('fetchPage 命中时直接返回 raw，不发请求', async () => {
+    const { client, calls } = countingRequest()
+    const debugEngine = new CrawlEngine({
+      request: client,
+      debugSource: (url) =>
+        url === `${origin}/list` ? { raw: listHtml, statusCode: 200, contentType: 'html' } : null,
+    })
+
+    const context = makeContext()
+    const page = await debugEngine.fetchPage(context)
+
+    expect(page.debug).toBe(true)
+    expect(page.status).toBe(200)
+    expect(page.html).toContain('news-item')
+    expect(calls()).toBe(0)
+  })
+
+  it('浏览器模式命中调试数据时不启动浏览器', async () => {
+    const debugEngine = new CrawlEngine({
+      request,
+      browser: null,
+      debugSource: () => ({ raw: detailHtml, statusCode: 200 }),
+    })
+    const context = makeContext(makeRule({ request: { mode: 'browser' } }))
+
+    // 未注入 browser 时，真实请求会抛「当前未启用浏览器」；命中调试数据则直接返回
+    const page = await debugEngine.fetchPage(context, `${origin}/news/1.html`)
+    expect(page.debug).toBe(true)
+    expect(page.html).toContain('article-content')
+  })
+
+  it('列表解析结果标记 debug，且链接照常提取', async () => {
+    const debugEngine = new CrawlEngine({
+      request,
+      debugSource: () => ({ raw: listHtml, statusCode: 200 }),
+    })
+    const page = await debugEngine.listPage(makeContext())
+
+    expect(page.debug).toBe(true)
+    expect(page.links.length).toBe(3)
+  })
+
+  it('未命中时照常发请求', async () => {
+    const debugEngine = new CrawlEngine({ request, debugSource: () => null })
+    const page = await debugEngine.fetchPage(makeContext())
+
+    expect(page.debug).toBeUndefined()
+    expect(page.html).toContain('news-item')
   })
 })

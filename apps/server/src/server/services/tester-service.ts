@@ -14,6 +14,7 @@ import type { ProxyRow } from '../../database/index.js'
 import { CrawlEngine, ParserError, cleanHtml, createParser } from '../../core/index.js'
 import type { PluginRegistry } from '../../plugin-system/index.js'
 import { createFlowPluginRunner, createParserPluginRunner } from './task-executor.js'
+import { getSettings } from './settings-service.js'
 import {
   createBrowserClient,
   RequestError,
@@ -46,6 +47,7 @@ import type {
 import { z } from 'zod'
 import { AppError, ValidationError } from '../errors.js'
 import { assertProxyUsable, proxyToSettings } from './common.js'
+import { hasDebugRaw, lookupDebugRaw } from './debug-data-service.js'
 
 /** 测试运行时依赖：统一请求客户端与 SSRF 策略。 */
 export interface TesterRuntime {
@@ -169,6 +171,9 @@ function summarizePluginArticle(article: ArticleData | null): TesterFieldResultD
   })
 }
 
+/** 命中调试数据时给结果的统一前缀：让用户知道「没有真的访问站点」。 */
+const DEBUG_NOTE = '使用调试数据（未发网络请求）；'
+
 function describeError(error: unknown): string {
   if (error instanceof RequestError) return `${error.code}：${error.message}`
   if (error instanceof ParserError) return `${error.code}：${error.message}`
@@ -236,10 +241,14 @@ async function withBrowser<T>(
   mode: 'http' | 'browser',
   runtime: TesterRuntime,
   run: (engine: CrawlEngine) => Promise<T>,
+  /** 调试数据已命中时不必启动浏览器：数据和渲染无关 */
+  skipBrowser = false,
 ): Promise<T> {
   let browser: BrowserClient | null = null
-  if (mode === 'browser') {
+  if (mode === 'browser' && !skipBrowser) {
     browser = createBrowserClient({
+      // 与正式采集共用系统设置：关闭无头后，试采 / 页面快照同样弹出可见浏览器
+      headless: getSettings().browserHeadless,
       ssrf: { allowPrivateNetwork: runtime.allowPrivateNetwork },
       timeoutMs: TESTER_TIMEOUT_MAX_MS,
     })
@@ -247,6 +256,8 @@ async function withBrowser<T>(
   const engine = new CrawlEngine({
     request: runtime.request,
     browser,
+    // 调试数据优先：网址完全匹配时直接用存档 raw，不发请求
+    debugSource: lookupDebugRaw,
     // 解析器插件链与正式采集同一实现（列表与详情阶段都执行）
     parserPluginRunner: runtime.pluginRegistry
       ? createParserPluginRunner(runtime.pluginRegistry, runtime.request)
@@ -281,9 +292,10 @@ export async function fetchPageSnapshot(
   const proxy = resolveProxySetting(input.proxyId)
   const context = buildTestContext(input, { version: 1 }, proxy)
   const startedAt = performance.now()
+  const debug = hasDebugRaw(input.url)
 
   try {
-    const page = await withBrowser(mode, runtime, (engine) => engine.fetchPage(context))
+    const page = await withBrowser(mode, runtime, (engine) => engine.fetchPage(context), debug)
     const title = extractTitle(page.html)
     const sanitized = buildSnapshotHtml(page.html, page.finalUrl)
 
@@ -294,10 +306,11 @@ export async function fetchPageSnapshot(
       statusCode: page.status,
       elapsedMs: page.elapsedMs,
       mode: page.mode,
+      debug: page.debug === true,
       title,
       html: sanitized,
       base: page.finalUrl,
-      message: `HTTP ${page.status}，${page.mode} 模式，耗时 ${page.elapsedMs} ms`,
+      message: `${page.debug ? DEBUG_NOTE : ''}HTTP ${page.status}，${page.mode} 模式，耗时 ${page.elapsedMs} ms`,
     }
   } catch (error) {
     if (error instanceof AppError) throw error
@@ -308,6 +321,7 @@ export async function fetchPageSnapshot(
       statusCode: null,
       elapsedMs: Math.round(performance.now() - startedAt),
       mode,
+      debug: false,
       title: null,
       html: '',
       base: null,
@@ -391,9 +405,10 @@ export async function testAdhocList(
   const proxy = resolveProxySetting(input.proxyId)
   const context = buildTestContext(input, config, proxy)
   const startedAt = performance.now()
+  const debug = hasDebugRaw(input.url)
 
   try {
-    const page = await withBrowser(mode, runtime, (engine) => engine.listPage(context))
+    const page = await withBrowser(mode, runtime, (engine) => engine.listPage(context), debug)
     const preview = page.links.slice(0, MAX_LIST_PREVIEW).map((link) => ({
       url: link.url,
       title: link.title ?? null,
@@ -412,17 +427,20 @@ export async function testAdhocList(
       statusCode: page.status > 0 ? page.status : null,
       elapsedMs: page.elapsedMs,
       mode: page.mode,
+      debug: page.debug === true,
       itemCount: page.itemCount,
       linkCount: page.links.length,
       duplicateCount: page.duplicateCount,
       links: preview,
-      message: input.list.plugin
-        ? `插件 ${input.list.plugin} 返回 ${page.itemCount} 条数据，可用链接 ${page.links.length} 条` +
-          (page.duplicateCount > 0 ? `，丢弃 ${page.duplicateCount} 条重复/非法条目` : '')
-        : page.itemCount === 0
-          ? '列表项选择器没有命中任何节点，请检查 itemSelector'
-          : `命中 ${page.itemCount} 个列表项，提取 ${page.links.length} 条唯一链接` +
-            (page.duplicateCount > 0 ? `，丢弃 ${page.duplicateCount} 条重复/非法链接` : ''),
+      message:
+        (page.debug ? DEBUG_NOTE : '') +
+        (input.list.plugin
+          ? `插件 ${input.list.plugin} 返回 ${page.itemCount} 条数据，可用链接 ${page.links.length} 条` +
+            (page.duplicateCount > 0 ? `，丢弃 ${page.duplicateCount} 条重复/非法条目` : '')
+          : page.itemCount === 0
+            ? '列表项选择器没有命中任何节点，请检查 itemSelector'
+            : `命中 ${page.itemCount} 个列表项，提取 ${page.links.length} 条唯一链接` +
+              (page.duplicateCount > 0 ? `，丢弃 ${page.duplicateCount} 条重复/非法链接` : '')),
     }
   } catch (error) {
     if (error instanceof AppError) throw error
@@ -433,6 +451,7 @@ export async function testAdhocList(
       statusCode: null,
       elapsedMs: Math.round(performance.now() - startedAt),
       mode,
+      debug: false,
       itemCount: 0,
       linkCount: 0,
       duplicateCount: 0,
@@ -473,10 +492,14 @@ export async function testAdhocDetail(
   const proxy = resolveProxySetting(input.proxyId)
   const context = buildTestContext(input, config, proxy)
   const startedAt = performance.now()
+  const debug = hasDebugRaw(input.url)
 
   try {
-    const result = await withBrowser(mode, runtime, (engine) =>
-      engine.parseDetail(context, { url: input.url, sourceUrl: input.url }),
+    const result = await withBrowser(
+      mode,
+      runtime,
+      (engine) => engine.parseDetail(context, { url: input.url, sourceUrl: input.url }),
+      debug,
     )
 
     // 按用户配置的字段顺序输出诊断，而不是对象键序；插件路径按插件返回的字段列
@@ -507,20 +530,23 @@ export async function testAdhocDetail(
       statusCode: null,
       elapsedMs: Math.round(performance.now() - startedAt),
       mode,
+      debug,
       fields,
       missing,
       errors: result.errors,
       article: result.article,
-      message: ok
-        ? usePlugin
-          ? `详情插件 ${input.plugin} 返回 ${fields.length} 个字段`
-          : `提取 ${fields.length} 个字段全部成功`
-        : [
-            missing.length > 0 ? `缺失必填字段：${missing.join('、')}` : null,
-            result.errors.length > 0 ? result.errors.join('；') : null,
-          ]
-            .filter(Boolean)
-            .join('；'),
+      message:
+        (debug ? DEBUG_NOTE : '') +
+        (ok
+          ? usePlugin
+            ? `详情插件 ${input.plugin} 返回 ${fields.length} 个字段`
+            : `提取 ${fields.length} 个字段全部成功`
+          : [
+              missing.length > 0 ? `缺失必填字段：${missing.join('、')}` : null,
+              result.errors.length > 0 ? result.errors.join('；') : null,
+            ]
+              .filter(Boolean)
+              .join('；')),
     }
   } catch (error) {
     if (error instanceof AppError) throw error
@@ -531,6 +557,7 @@ export async function testAdhocDetail(
       statusCode: null,
       elapsedMs: Math.round(performance.now() - startedAt),
       mode,
+      debug: false,
       fields: [],
       missing: [],
       errors: [describeError(error)],

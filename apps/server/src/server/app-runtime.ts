@@ -3,6 +3,7 @@ import type { PluginRegistry } from '../plugin-system/index.js'
 import type { AppConfig } from './config.js'
 import type { Logger } from './lib/logger.js'
 import { flushProxyStats, startProxyStatsFlusher } from './services/proxy-stats.js'
+import { closeDebugCapture } from './services/debug-capture-service.js'
 import { TaskRuntime, type RecoveryResult } from './services/task-runtime.js'
 import { TaskScheduler } from './services/task-scheduler.js'
 import { setProxySecretKey } from './lib/proxy-secret.js'
@@ -94,7 +95,7 @@ export function startBackgroundJobs(options: { scheduler?: boolean } = {}): Back
   return { recovery, schedules }
 }
 
-/** 停机：停止调度、中止任务、刷盘统计。 */
+/** 停机：停止调度、中止任务、刷盘统计、关掉捕获浏览器。 */
 export async function stopBackgroundJobs(): Promise<void> {
   if (!current) return
   current.scheduler.stop()
@@ -103,4 +104,6 @@ export async function stopBackgroundJobs(): Promise<void> {
   current.stopStatsFlusher = null
   await current.tasks.stop()
   flushProxyStats()
+  // 捕获浏览器是用户手动开的窗口：进程退出时必须一起关掉，否则会留下孤儿 Chromium
+  await closeDebugCapture()
 }

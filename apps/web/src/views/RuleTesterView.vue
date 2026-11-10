@@ -267,7 +267,7 @@ async function runListTest(): Promise<void> {
   }
   const listFieldRules = listFieldsToRuleFields()
   if (!pluginId && (!listFieldRules.title || !listFieldRules.url)) {
-    ElMessage.warning('请先在「列表字段配置」中添加 title 和 url 字段（必填）')
+    ElMessage.warning('请先在「列表字段配置」中添加 title 和 url 字段（必填；Selector 可留空，表示取列表项节点本身）')
     return
   }
   listTesting.value = true
@@ -402,8 +402,12 @@ async function runDetailTest(): Promise<void> {
 /**
  * 草稿字段 → Rule Schema 的 FieldRule（第三阶段格式，不另造格式）。
  *
- * 必填不再由界面勾选：`requiredKeys` 里的字段（列表 title / url、详情 title / content）
+ * 必填不再由界面勾选：`requiredKeys` 里的字段（列表 title / url、详情 content）
  * 一律写入 `required: true`，避免漏标导致采集时空值静默入库。
+ *
+ * Selector **允许留空**（与 request-pack 一致，留空 = 取当前节点）：
+ * itemSelector 写成 `.list a` 时，url 字段留空 + 属性 href 就能取 a 的 href。
+ * 因此只有「完全没配置」的字段才丢弃——留空 selector 的必填字段一律保留。
  */
 function draftFieldsToRuleFields(
   source: TesterFieldDraft[],
@@ -411,15 +415,19 @@ function draftFieldsToRuleFields(
 ): Record<string, FieldRule> {
   const output: Record<string, FieldRule> = {}
   for (const field of source) {
-    if (!field.selector.trim() && !field.defaultValue.trim()) continue
+    const key = field.key.trim()
+    const required = field.required || requiredKeys.includes(key)
+    const selector = field.selector.trim()
+    const configured =
+      selector !== '' || field.attribute.trim() !== '' || field.defaultValue.trim() !== ''
+    if (!configured && !required) continue
     const clean: FieldCleanRule = {}
     if (field.collapseWhitespace) clean.collapseWhitespace = true
-    const key = field.key.trim()
     output[key] = {
       type: field.type,
-      ...(field.selector.trim() ? { selector: field.selector.trim() } : {}),
+      ...(selector ? { selector } : {}),
       ...(field.type === 'attr' && field.attribute.trim() ? { attribute: field.attribute.trim() } : {}),
-      ...((field.required || requiredKeys.includes(key)) ? { required: true } : {}),
+      ...(required ? { required: true } : {}),
       ...(field.defaultValue.trim() ? { defaultValue: field.defaultValue } : {}),
       ...(Object.keys(clean).length > 0 ? { clean } : {}),
     }
@@ -639,6 +647,7 @@ const requestInfo = computed(() => {
     statusCode: snapshot.statusCode,
     elapsedMs: snapshot.elapsedMs,
     mode: snapshot.mode,
+    debug: snapshot.debug === true,
   }
 })
 </script>
@@ -838,7 +847,7 @@ const requestInfo = computed(() => {
               v-model:fields="draft.fields"
               class="stack-section"
               title="字段配置"
-              subtitle="title 与 content 必填；与列表规则共用同一套内置字段，自定义字段随文章入库存入 extra"
+              subtitle="仅 content 必填；标题优先取详情页 title 字段，未配置时继承列表标题（独立测详情回退页面自带标题），自定义字段随文章入库存入 extra"
               :built-ins="ARTICLE_FIELD_PRESETS"
               :required-keys="DETAIL_REQUIRED_FIELD_KEYS"
             />

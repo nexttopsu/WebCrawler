@@ -10,8 +10,9 @@ import type {
   FieldRule,
   ValidateConfig,
 } from '../shared/index.js'
-import { absolutizeHtml, cleanHtml, htmlToText } from './clean.js'
+import { absolutizeHtml, cleanHtml, cleanText, htmlToText } from './clean.js'
 import { ParserError } from './errors.js'
+import { parseDocument } from './parser/document.js'
 import { Parser, createParser } from './parser/index.js'
 import { extractFieldsViaHtml2Object } from './parser/html2object-bridge.js'
 import type { ExtractionResult, FieldExtraction } from './parser/extract.js'
@@ -42,6 +43,8 @@ export interface PipelineInput {
   validate?: ValidateConfig
   /** 列表阶段提取的封面图；详情页未映射到 cover/coverUrl 时作为兜底 */
   listCoverUrl?: string
+  /** 列表阶段提取的标题；详情规则未配置 title 字段或没抽到时继承 */
+  listTitle?: string
   /** 附加元数据，会与自定义字段一起写入 article.metadata */
   metadata?: Record<string, unknown>
   /**
@@ -85,6 +88,22 @@ function stringValue(value: unknown): string {
   if (typeof value === 'string') return value
   if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
   return ''
+}
+
+/**
+ * 详情规则没有配置 title 字段时，从页面本身兜底一个标题。
+ *
+ * 正式采集优先用列表标题（`listTitle`）；可视化测试器直接测详情页时没有列表上下文，
+ * 用 `<title>` / 首个 `<h1>` 兜底，保证「详情只配 content」也能跑通。
+ * 规则显式配置了 title 字段就不做这层兜底，尊重配置者声明的必填语义。
+ */
+function inferPageTitle(body: string): string {
+  try {
+    const doc = parseDocument(body)
+    return cleanText(doc.selectFirst('title')?.text()) || cleanText(doc.selectFirst('h1')?.text())
+  } catch {
+    return ''
+  }
 }
 
 /** 执行数据管道。 */
@@ -178,7 +197,13 @@ export async function runPipeline(input: PipelineInput, parser: Parser = sharedP
 
   // 3. 校验
   parseStart = performance.now()
-  const title = stringValue(extraction.data.title)
+  // 标题优先级：详情页 title 字段 > 列表阶段标题 >（未配置 title 字段时）页面 <title>/<h1>。
+  // 详情规则只需保证 content；列表规则的 title / url 仍由 Rule Schema 强制。
+  const hasTitleRule = 'title' in input.fields
+  const title =
+    stringValue(extraction.data.title).trim() ||
+    (input.listTitle ?? '').trim() ||
+    (!hasTitleRule && input.contentType !== 'json' ? inferPageTitle(input.body) : '')
   const validationErrors = new Set<string>()
 
   if (!title.trim()) {

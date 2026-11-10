@@ -77,6 +77,14 @@ describe('html2object 桥接：字段提取', () => {
     })
     expect(result.data.card).toMatchObject({ text: '第一段' })
   })
+
+  it('详情根作用域留空 selector 报错，而不是取整页文本', () => {
+    const result = extractFieldsViaHtml2Object(html, {
+      title: { type: 'text', required: true },
+    })
+    expect(result.data.title).toBeUndefined()
+    expect(result.errors.join(' ')).toContain('当前节点')
+  })
 })
 
 describe('html2object 桥接：列表项提取', () => {
@@ -91,5 +99,17 @@ describe('html2object 桥接：列表项提取', () => {
     expect(items).toHaveLength(2)
     expect(items[0]).toMatchObject({ title: '第一条', url: '/news/1.html', cover: '/img/1.png', tag: '置顶' })
     expect(items[1]).toMatchObject({ title: '第二条', url: '/news/2.html' })
+  })
+
+  it('容器直接指向链接时，留空 selector 取当前节点', () => {
+    const items = extractListItems(html, 'li.item a.t', {
+      title: { type: 'text', required: true },
+      url: { type: 'attr', attribute: 'href', required: true },
+    })
+
+    expect(items).toEqual([
+      { title: '第一条', url: '/news/1.html' },
+      { title: '第二条', url: '/news/2.html' },
+    ])
   })
 })

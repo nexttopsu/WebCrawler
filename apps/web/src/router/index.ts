@@ -85,6 +85,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '日志中心' },
       },
       {
+        path: 'debug-data',
+        name: 'debug-data',
+        component: () => import('@/views/DebugDataView.vue'),
+        meta: { title: '调试数据' },
+      },
+      {
         path: 'settings',
         name: 'settings',
         component: () => import('@/views/SettingsView.vue'),

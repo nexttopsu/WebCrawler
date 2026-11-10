@@ -85,6 +85,8 @@ export interface PageSnapshotDto {
   statusCode: number | null
   elapsedMs: number
   mode: RequestMode
+  /** 内容来自调试数据（网址完全匹配，未发真实请求） */
+  debug?: boolean
   title: string | null
   /** 清洗后的 HTML；相对地址以 base 为基准解析 */
   html: string
@@ -101,6 +103,8 @@ export interface TesterListResultDto {
   statusCode: number | null
   elapsedMs: number
   mode: RequestMode
+  /** 内容来自调试数据（网址完全匹配，未发真实请求） */
+  debug?: boolean
   /** itemSelector 命中的节点数 */
   itemCount: number
   /** 去重后的链接数 */
@@ -139,6 +143,8 @@ export interface TesterDetailResultDto {
   statusCode: number | null
   elapsedMs: number
   mode: RequestMode
+  /** 内容来自调试数据（网址完全匹配，未发真实请求） */
+  debug?: boolean
   /** 每个字段的提取值与命中情况 */
   fields: TesterFieldResultDto[]
   /** 必填但缺失的字段 */

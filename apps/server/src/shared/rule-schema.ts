@@ -59,6 +59,16 @@ const urlSchema = (label: string) =>
 
 const selectorSchema = z.string().trim().min(1).max(MAX_SELECTOR_LENGTH)
 
+/**
+ * 字段级选择器：**允许留空**。
+ *
+ * 留空表示「取当前作用域节点」——与 request-pack 的语义一致：在列表项 / 对象
+ * 节点内，空选择器就是这个节点本身。典型用法：`itemSelector` 写成 `.list a`，
+ * url 字段留空 + `attr=href`，取到的就是这个 `a` 的 href。
+ * 只有文档根作用域（详情页）留空才会在提取阶段报错——那里没有「当前节点」。
+ */
+const fieldSelectorSchema = z.string().trim().max(MAX_SELECTOR_LENGTH)
+
 /** 字段级清洗规则。 */
 export const fieldCleanRuleSchema = z
   .object({
@@ -115,7 +125,7 @@ export const fieldRuleSchema: z.ZodType<FieldRule, unknown> = z.lazy(() =>
   z
     .object({
       type: z.enum(['text', 'html', 'attr', 'list', 'object']),
-      selector: selectorSchema.optional(),
+      selector: fieldSelectorSchema.optional(),
       attribute: z
         .string()
         .trim()
@@ -130,14 +140,7 @@ export const fieldRuleSchema: z.ZodType<FieldRule, unknown> = z.lazy(() =>
     })
     .strict()
     .superRefine((rule, ctx) => {
-      const needsSelector = rule.type === 'text' || rule.type === 'html' || rule.type === 'attr'
-      if (needsSelector && !rule.selector && !rule.jsonPath) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['selector'],
-          message: `type=${rule.type} 时必须提供 selector 或 jsonPath`,
-        })
-      }
+      // selector 允许留空（取当前节点），因此不再强制要求；根作用域留空由提取阶段报错。
       if (rule.type === 'attr' && !rule.attribute && !rule.jsonPath) {
         ctx.addIssue({ code: 'custom', path: ['attribute'], message: 'type=attr 时必须提供 attribute' })
       }

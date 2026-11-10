@@ -97,7 +97,7 @@ describe('插件管理', () => {
 
     // 新建一个 App 等同于重启进程：注册表是空的，只能靠启动时读数据库
     const restarted = createApp({
-      config: { ...loadConfig({}), logLevel: 'error', proxySecretKey: 'test-secret-key-0123456789' },
+      config: { ...loadConfig({}), logLevel: 'error', proxySecretKey: 'test-secret-key-0123456789', debugDatabaseFile: ':memory:' },
       logger: createLogger('error'),
     })
     const response = await call(restarted, '/api/plugins')

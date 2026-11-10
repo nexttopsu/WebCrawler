@@ -54,6 +54,7 @@ import {
   findArticleIdByUrl,
 } from './article-service.js'
 import { assertProxyUsable, findSiteOrThrow, proxyToSettings } from './common.js'
+import { lookupDebugRaw } from './debug-data-service.js'
 import { writeLog } from './log-service.js'
 import { recordProxyUsage } from './proxy-stats.js'
 import { getSettings } from './settings-service.js'
@@ -327,6 +328,8 @@ export class TaskExecutor {
     const engine = new CrawlEngine({
       request: this.deps.request,
       browser,
+      // 调试数据优先：网址完全匹配时直接用存档 raw，不发请求（见 debug-data-service）
+      debugSource: lookupDebugRaw,
       parserPluginRunner: this.deps.pluginRegistry
         ? createParserPluginRunner(this.deps.pluginRegistry, this.deps.request)
         : undefined,

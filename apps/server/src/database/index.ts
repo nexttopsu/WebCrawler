@@ -2,6 +2,7 @@
 export type { Database, ModelData, ModelRow } from 'ormlet'
 
 export * from './connection.js'
+export * from './debug.js'
 export * from './migrations/index.js'
 export * from './models/fields.js'
 export * from './models/index.js'

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { H3 } from 'h3'
 import { getDatabaseContext } from '../../src/database/index.js'
+import { readSettings } from '../../src/server/services/settings-service.js'
 import { call, getTestRuntime, json, startTestApp, stopTestApp } from './helpers/app.js'
 
 /**
@@ -149,5 +150,22 @@ describe('系统设置', () => {
 
     const again = await call(app, '/api/settings')
     expect(again.body.data.items.find((item: any) => item.key === 'log.level').value).toBe('warn')
+  })
+
+  it('浏览器无头模式：关闭后运行时立即读到 false（缓存已失效）', async () => {
+    expect(readSettings().browserHeadless).toBe(true)
+
+    const off = await call(app, '/api/settings', json({ 'browser.headless': false }, 'PATCH'))
+    expect(off.status).toBe(200)
+    expect(off.body.data.applied).toContain('browser.headless')
+    const item = off.body.data.items.find((entry: any) => entry.key === 'browser.headless')
+    expect(item.value).toBe(false)
+
+    // 正式任务、规则试抓、可视化测试器都在创建浏览器时实时读取这个值
+    expect(readSettings().browserHeadless).toBe(false)
+
+    const on = await call(app, '/api/settings', json({ 'browser.headless': true }, 'PATCH'))
+    expect(on.status).toBe(200)
+    expect(readSettings().browserHeadless).toBe(true)
   })
 })
