@@ -23,7 +23,8 @@ import { RAW_MAX_BYTES, saveCapturedSample } from './debug-data-service.js'
  * 几个刻意的设计：
  * - **持久化用户目录**（`data/capture-profile`）：登录态、Cookie 跨会话保留，
  *   才能抓到需要登录的页面；删掉这个目录即可回到干净的浏览器。
- * - **覆盖而不是报冲突**：同一个网址再访问一次就更新 raw，保留备注、启停与命中统计。
+ * - **覆盖而不是报冲突**：同一个网址再访问一次就更新 raw，保留备注与命中统计；
+ *   被标记为「不可覆盖」的条目会跳过（详见 `saveCapturedSample`）。
  * - **只记主文档 + 可选 JSON**：iframe / 图片 / 字体不入库，避免一条页面带出几十条噪音。
  * - **只记 200 / 304**：只有这两个状态码才有可解析的正文；4xx / 5xx 的错误页、
  *   3xx 跳转的空响应都不入库，避免调试库里混进一堆没法用的样本。
@@ -368,6 +369,13 @@ function captureResponse(current: CaptureSession, response: PlaywrightResponse):
           contentType,
           note: CAPTURE_NOTE,
         })
+
+        // 存档被标记为不可覆盖：保留手工整理的原文，计入 skipped
+        if (saved.skipped) {
+          current.skipped += 1
+          current.lastUrl = response.url()
+          return
+        }
 
         current.captured += 1
         if (saved.created) current.created += 1

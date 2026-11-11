@@ -47,7 +47,7 @@ describe('调试库初始化', () => {
     // 建表可用：写入后能读回
     context.db
       .prepare(
-        `INSERT INTO ${DEBUG_SAMPLE_TABLE} (url, raw, statusCode, contentType, enabled, hitCount, createdAt, updatedAt)
+        `INSERT INTO ${DEBUG_SAMPLE_TABLE} (url, raw, statusCode, contentType, overridable, hitCount, createdAt, updatedAt)
          VALUES (?, ?, ?, ?, 1, 0, ?, ?)`,
       )
       .run('https://debug.local/a', '<html></html>', 200, 'html', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
@@ -92,7 +92,7 @@ describe('调试库初始化', () => {
     const first = initDebugDatabase(':memory:')
     first.db
       .prepare(
-        `INSERT INTO ${DEBUG_SAMPLE_TABLE} (url, raw, statusCode, contentType, enabled, hitCount, createdAt, updatedAt)
+        `INSERT INTO ${DEBUG_SAMPLE_TABLE} (url, raw, statusCode, contentType, overridable, hitCount, createdAt, updatedAt)
          VALUES ('https://debug.local/x', '', 200, 'html', 1, 0, '', '')`,
       )
       .run()
@@ -102,5 +102,47 @@ describe('调试库初始化', () => {
       total: number
     }
     expect(row.total).toBe(0)
+  })
+
+  it('老库（没有 overridable 列）初始化时自动补列，默认允许覆盖', () => {
+    const file = tempFile()
+
+    // 先按旧结构手工建库：只有 enabled，没有 overridable
+    const sqlite = initDebugDatabase(file)
+    sqlite.db.exec(`DROP TABLE ${DEBUG_SAMPLE_TABLE}`)
+    sqlite.db.exec(`
+      CREATE TABLE ${DEBUG_SAMPLE_TABLE} (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        url         TEXT    NOT NULL,
+        raw         TEXT    NOT NULL DEFAULT '',
+        statusCode  INTEGER NOT NULL DEFAULT 200,
+        contentType TEXT    NOT NULL DEFAULT 'html',
+        note        TEXT,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        hitCount    INTEGER NOT NULL DEFAULT 0,
+        lastHitAt   TEXT,
+        createdAt   TEXT    NOT NULL,
+        updatedAt   TEXT    NOT NULL
+      ) STRICT
+    `)
+    sqlite.db
+      .prepare(
+        `INSERT INTO ${DEBUG_SAMPLE_TABLE} (url, raw, statusCode, contentType, enabled, hitCount, createdAt, updatedAt)
+         VALUES ('https://debug.local/legacy', '<html></html>', 200, 'html', 1, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run()
+    closeDebugDatabase()
+
+    // 重新初始化触发补列；老行取默认值 1（允许覆盖）
+    const context = initDebugDatabase(file)
+    const columns = context.db
+      .prepare(`PRAGMA table_info(${DEBUG_SAMPLE_TABLE})`)
+      .all() as unknown as Array<{ name: string }>
+    expect(columns.map((column) => column.name)).toContain('overridable')
+
+    const row = context.db
+      .prepare(`SELECT overridable FROM ${DEBUG_SAMPLE_TABLE} WHERE url = 'https://debug.local/legacy'`)
+      .get() as unknown as { overridable: number }
+    expect(row.overridable).toBe(1)
   })
 })

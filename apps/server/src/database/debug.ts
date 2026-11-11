@@ -30,13 +30,32 @@ const CREATE_DEBUG_SAMPLE = `
     statusCode  INTEGER NOT NULL DEFAULT 200,
     contentType TEXT    NOT NULL DEFAULT 'html',
     note        TEXT,
-    enabled     INTEGER NOT NULL DEFAULT 1,
+    overridable INTEGER NOT NULL DEFAULT 1,
     hitCount    INTEGER NOT NULL DEFAULT 0,
     lastHitAt   TEXT,
     createdAt   TEXT    NOT NULL,
     updatedAt   TEXT    NOT NULL
   ) STRICT
 `
+
+/**
+ * 存量表补列：老库里没有 `overridable` 时补上（默认允许覆盖）。
+ *
+ * `CREATE TABLE IF NOT EXISTS` 不会更新已有表结构，不补列的话
+ * 读写会直接报「no such column」。老库里的 `enabled` 列留在原地，
+ * 建表语句已经不再声明它，新库不会有这一列。
+ */
+const ENSURE_OVERRIDABLE_COLUMN = `
+  ALTER TABLE ${DEBUG_SAMPLE_TABLE} ADD COLUMN overridable INTEGER NOT NULL DEFAULT 1
+`
+
+function ensureOverridableColumn(db: Database): void {
+  const columns = db
+    .prepare(`PRAGMA table_info(${DEBUG_SAMPLE_TABLE})`)
+    .all() as unknown as Array<{ name: string }>
+  if (columns.some((column) => column.name === 'overridable')) return
+  db.exec(ENSURE_OVERRIDABLE_COLUMN)
+}
 
 /**
  * 网址唯一索引。
@@ -86,6 +105,11 @@ export function initDebugDatabase(file: string): DebugDatabaseContext {
   ensureParentDirectory(target)
   const db = new Database(target, { busyTimeout: 5000, journalMode: 'WAL' })
   db.exec(CREATE_DEBUG_SAMPLE)
+  try {
+    ensureOverridableColumn(db)
+  } catch {
+    // 补列失败（权限 / 磁盘）不阻塞启动，读写侧的查询失败会暴露具体原因
+  }
   try {
     db.exec(CREATE_URL_INDEX)
   } catch {

@@ -21,8 +21,11 @@ export interface DebugSampleDto {
   contentType: DebugContentType
   /** 备注，便于说明这条数据是怎么来的 */
   note: string | null
-  /** 停用后不参与匹配，但数据保留 */
-  enabled: boolean
+  /**
+   * 是否允许被捕获浏览器覆盖：捕获到同网址时，不可覆盖的条目会跳过更新，
+   * 保留手工整理好的原文。默认允许。
+   */
+  overridable: boolean
   /** 原文长度（字节），列表里代替 raw 展示 */
   rawSize: number
   /** 被采集 / 测试命中的次数 */
@@ -45,14 +48,14 @@ export interface DebugSampleInput {
   statusCode?: number
   contentType?: DebugContentType
   note?: string | null
-  enabled?: boolean
+  overridable?: boolean
 }
 
 /** 调试数据列表的筛选条件（服务端 Schema 的对外形态）。 */
 export interface DebugSampleQuery {
   keyword?: string
   contentType?: DebugContentType
-  enabled?: boolean
+  overridable?: boolean
 }
 
 /* -------------------------------------------------------------------------- */

@@ -7,11 +7,12 @@
  * 或在站点改版 / 下线后继续调规则。
  *
  * 列表刻意不展示 raw（动辄几百 KB），只在「查看 / 编辑」时单独读取；
- * 删除支持勾选批量与按筛选条件批量，语义与日志中心一致。
+ * 删除与「可覆盖」的批量修改都支持勾选批量与按筛选条件批量，语义一致。
+ * 「可覆盖」控制捕获浏览器：关掉后再次访问该网址不会冲掉手工整理的存档。
  */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Check, CircleStop, Copy, Eye, Globe, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import { Check, CircleStop, Copy, Eye, Globe, Lock, Pencil, Plus, RefreshCw, Trash2, Unlock } from '@lucide/vue'
 import type {
   DebugCaptureStatusDto,
   DebugContentType,
@@ -25,6 +26,7 @@ import {
   getDebugCaptureStatus,
   getDebugSample,
   listDebugSamples,
+  setDebugSamplesOverridable,
   startDebugCapture,
   stopDebugCapture,
   updateDebugSample,
@@ -50,16 +52,16 @@ const CONTENT_TYPES: Array<{ value: DebugContentType; label: string }> = [
   { value: 'json', label: 'JSON' },
 ]
 
-const list = useListQuery<DebugSampleDto, { keyword: string; contentType: string; enabled: string }>(
+const list = useListQuery<DebugSampleDto, { keyword: string; contentType: string; overridable: string }>(
   (params) =>
     listDebugSamples({
       page: params.page,
       pageSize: params.pageSize,
       keyword: params.keyword || undefined,
       contentType: (params.contentType || undefined) as DebugContentType | undefined,
-      enabled: (params.enabled || undefined) as 'true' | 'false' | undefined,
+      overridable: (params.overridable || undefined) as 'true' | 'false' | undefined,
     }),
-  { keyword: '', contentType: '', enabled: '' },
+  { keyword: '', contentType: '', overridable: '' },
 )
 
 /* ------------------------------- 捕获浏览器 ------------------------------- */
@@ -184,10 +186,10 @@ const batchCount = computed(() =>
 /** 把当前筛选条件翻译成人话，放进二次确认弹窗。 */
 const filterText = computed(() => {
   const parts: string[] = []
-  const { keyword, contentType, enabled } = list.filters
+  const { keyword, contentType, overridable } = list.filters
   if (keyword) parts.push(`关键词「${keyword}」`)
   if (contentType) parts.push(`类型 ${contentType.toUpperCase()}`)
-  if (enabled) parts.push(enabled === 'true' ? '仅启用' : '仅停用')
+  if (overridable) parts.push(overridable === 'true' ? '可覆盖' : '不可覆盖')
   return parts.join('、') || '（未设置条件）'
 })
 
@@ -205,7 +207,7 @@ const draftForm = reactive({
   statusCode: 200,
   contentType: 'html' as DebugContentType,
   note: '',
-  enabled: true,
+  overridable: true,
 })
 
 const rules: FormRules = {
@@ -230,7 +232,7 @@ function resetForm(): void {
     statusCode: 200,
     contentType: 'html',
     note: '',
-    enabled: true,
+    overridable: true,
   })
 }
 
@@ -256,7 +258,7 @@ async function openEdit(row: DebugSampleDto): Promise<void> {
       statusCode: detail.statusCode,
       contentType: detail.contentType,
       note: detail.note ?? '',
-      enabled: detail.enabled,
+      overridable: detail.overridable,
     })
   } catch (error) {
     ElMessage.error(errorMessage(error))
@@ -282,7 +284,7 @@ async function submit(): Promise<void> {
       statusCode: draftForm.statusCode,
       contentType: draftForm.contentType,
       note: draftForm.note.trim() || null,
-      enabled: draftForm.enabled,
+      overridable: draftForm.overridable,
     }
     if (editingId.value) {
       await updateDebugSample(editingId.value, payload)
@@ -356,15 +358,19 @@ async function copyUrl(row: DebugSampleDto): Promise<void> {
   }
 }
 
-/* --------------------------------- 启停 --------------------------------- */
+/* --------------------------------- 覆盖保护 --------------------------------- */
 
 const togglingId = ref<number | null>(null)
 
 async function toggle(row: DebugSampleDto): Promise<void> {
   togglingId.value = row.id
   try {
-    await updateDebugSample(row.id, { enabled: !row.enabled })
-    ElMessage.success(row.enabled ? '已停用：这条数据不再参与匹配' : '已启用：匹配到该网址时直接返回 raw')
+    await updateDebugSample(row.id, { overridable: !row.overridable })
+    ElMessage.success(
+      row.overridable
+        ? '已锁定：捕获浏览器再次访问该网址时不会覆盖这条存档'
+        : '已解锁：捕获浏览器再次访问该网址时会覆盖为最新内容',
+    )
     await list.load()
   } catch (error) {
     ElMessage.error(errorMessage(error))
@@ -411,7 +417,7 @@ async function confirmBatchDelete(): Promise<void> {
         : {
             keyword: list.filters.keyword || undefined,
             contentType: (list.filters.contentType || undefined) as DebugContentType | undefined,
-            enabled: (list.filters.enabled || undefined) as 'true' | 'false' | undefined,
+            overridable: (list.filters.overridable || undefined) as 'true' | 'false' | undefined,
           }
     const { deleted } = await deleteDebugSamples(params)
     ElMessage.success(`已删除 ${deleted} 条调试数据`)
@@ -422,6 +428,48 @@ async function confirmBatchDelete(): Promise<void> {
     ElMessage.error(errorMessage(error))
   } finally {
     batchLoading.value = false
+  }
+}
+
+/* ------------------------------- 批量设置可覆盖 ------------------------------- */
+
+const batchOverridableVisible = ref(false)
+const batchOverridableLoading = ref(false)
+/** 弹窗里选择的目标值：true = 允许覆盖，false = 锁定 */
+const batchOverridableValue = ref<'true' | 'false'>('false')
+
+function openBatchOverridable(): void {
+  // 默认建议「锁定」：批量放开覆盖风险更大，让用户显式选择
+  batchOverridableValue.value = 'false'
+  batchOverridableVisible.value = true
+}
+
+async function confirmBatchOverridable(): Promise<void> {
+  batchOverridableLoading.value = true
+  try {
+    const scope =
+      batchMode.value === 'selection'
+        ? { ids: selection.value.map((row) => row.id).join(',') }
+        : {
+            keyword: list.filters.keyword || undefined,
+            contentType: (list.filters.contentType || undefined) as DebugContentType | undefined,
+          }
+    const { updated } = await setDebugSamplesOverridable({
+      ...scope,
+      overridable: batchOverridableValue.value,
+    })
+    ElMessage.success(
+      batchOverridableValue.value === 'true'
+        ? `已放开 ${updated} 条：捕获浏览器可覆盖`
+        : `已锁定 ${updated} 条：捕获浏览器不会覆盖`,
+    )
+    batchOverridableVisible.value = false
+    selection.value = []
+    await list.load()
+  } catch (error) {
+    ElMessage.error(errorMessage(error))
+  } finally {
+    batchOverridableLoading.value = false
   }
 }
 
@@ -458,6 +506,27 @@ function formatBytes(bytes: number): string {
             <el-button :disabled="captureRunning" @click="openCaptureDialog">
               <Globe :size="14" />
               启动浏览器
+            </el-button>
+          </span>
+        </el-tooltip>
+        <el-tooltip
+          :content="
+            batchMode === 'selection'
+              ? `修改勾选的 ${batchCount} 条`
+              : batchMode === 'filters'
+                ? '按当前筛选条件修改'
+                : '请先勾选记录或设置筛选条件'
+          "
+          :disabled="Boolean(batchMode)"
+          placement="bottom"
+        >
+          <span>
+            <el-button
+              :disabled="!batchMode"
+              @click="openBatchOverridable"
+            >
+              <Lock :size="14" />
+              批量设置覆盖
             </el-button>
           </span>
         </el-tooltip>
@@ -577,14 +646,14 @@ function formatBytes(bytes: number): string {
         />
       </el-select>
       <el-select
-        v-model="list.filters.enabled"
-        placeholder="全部状态"
+        v-model="list.filters.overridable"
+        placeholder="覆盖保护"
         clearable
         style="width: 120px"
         @change="list.search()"
       >
-        <el-option label="启用" value="true" />
-        <el-option label="停用" value="false" />
+        <el-option label="可覆盖" value="true" />
+        <el-option label="不可覆盖" value="false" />
       </el-select>
     </FilterBar>
 
@@ -649,14 +718,20 @@ function formatBytes(bytes: number): string {
         </template>
       </el-table-column>
 
-      <el-table-column label="状态" width="96">
+      <el-table-column label="覆盖" width="96">
         <template #default="{ row }">
-          <el-switch
-            :model-value="row.enabled"
-            :loading="togglingId === row.id"
-            size="small"
-            @change="toggle(row)"
-          />
+          <el-tooltip
+            :content="row.overridable ? '可覆盖：捕获浏览器会更新这条存档' : '已锁定：捕获浏览器不会覆盖这条存档'"
+            placement="top"
+            :show-after="400"
+          >
+            <el-switch
+              :model-value="row.overridable"
+              :loading="togglingId === row.id"
+              size="small"
+              @change="toggle(row)"
+            />
+          </el-tooltip>
         </template>
       </el-table-column>
 
@@ -722,8 +797,9 @@ function formatBytes(bytes: number): string {
               </el-radio-button>
             </el-radio-group>
           </el-form-item>
-          <el-form-item label="启用">
-            <el-switch v-model="draftForm.enabled" />
+          <el-form-item label="允许覆盖">
+            <el-switch v-model="draftForm.overridable" />
+            <p class="form-hint">关闭后，捕获浏览器再次访问该网址时不会覆盖这条存档。</p>
           </el-form-item>
         </div>
 
@@ -760,8 +836,8 @@ function formatBytes(bytes: number): string {
           <dd>{{ formatBytes(detail.rawSize) }}</dd>
           <dt>命中</dt>
           <dd>{{ detail.hitCount }} 次{{ detail.lastHitAt ? ` · 最近 ${formatTime(detail.lastHitAt)}` : '' }}</dd>
-          <dt>状态</dt>
-          <dd>{{ detail.enabled ? '启用（匹配时直接返回 raw）' : '停用（不参与匹配）' }}</dd>
+          <dt>覆盖</dt>
+          <dd>{{ detail.overridable ? '允许（捕获浏览器可更新 raw）' : '锁定（捕获浏览器不会覆盖）' }}</dd>
           <dt>备注</dt>
           <dd>{{ detail.note || '—' }}</dd>
           <dt>更新</dt>
@@ -812,6 +888,38 @@ function formatBytes(bytes: number): string {
         <p class="danger-text">{{ filterText }}</p>
       </template>
       <p class="wb-secondary">共 {{ batchCount }} 条待匹配，删除后不可恢复。</p>
+    </ConfirmDialog>
+
+    <!-- 批量设置可覆盖 -->
+    <ConfirmDialog
+      v-model="batchOverridableVisible"
+      title="批量设置覆盖保护"
+      :loading="batchOverridableLoading"
+      confirm-text="应用"
+      @confirm="confirmBatchOverridable"
+    >
+      <p v-if="batchMode === 'selection'" class="wb-secondary">
+        将修改勾选的 <b>{{ batchCount }}</b> 条调试数据：
+      </p>
+      <template v-else>
+        <p class="wb-secondary">将修改符合以下条件的调试数据：</p>
+        <p class="wb-secondary">{{ filterText }}</p>
+      </template>
+      <el-radio-group v-model="batchOverridableValue" class="overridable-choice">
+        <el-radio value="false">
+          <span class="overridable-option">
+            <Lock :size="13" />
+            锁定 —— 捕获浏览器不再覆盖这些存档
+          </span>
+        </el-radio>
+        <el-radio value="true">
+          <span class="overridable-option">
+            <Unlock :size="13" />
+            允许覆盖 —— 捕获浏览器可更新这些存档
+          </span>
+        </el-radio>
+      </el-radio-group>
+      <p class="wb-secondary">共 {{ batchCount }} 条待匹配，只影响捕获浏览器，采集 / 测试命中不受影响。</p>
     </ConfirmDialog>
 
     <!-- 启动捕获浏览器 -->
@@ -1121,6 +1229,20 @@ function formatBytes(bytes: number): string {
   margin: 6px 0;
   font-size: 13px;
   color: var(--wb-danger);
+}
+
+.overridable-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 10px 0;
+}
+
+.overridable-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .break-all {

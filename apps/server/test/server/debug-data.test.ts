@@ -2,9 +2,10 @@
  * 调试数据 API（独立库 `data/debug.db`）验收测试。
  *
  * 覆盖三件事：
- * 1. 管理接口：列表不返回 raw、新增 / 编辑 / 单删 / 批量筛选删除、网址唯一；
+ * 1. 管理接口：列表不返回 raw、新增 / 编辑 / 单删 / 批量筛选删除、网址唯一、
+ *    批量设置「可覆盖」；
  * 2. 与测试器联动：网址完全匹配时直接返回存档 raw，不发真实请求；
- * 3. 边界：停用的记录不参与匹配、无条件的批量删除被拒绝。
+ * 3. 边界：无条件的批量删除 / 批量修改被拒绝。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { H3 } from 'h3'
@@ -55,7 +56,7 @@ describe('调试数据管理接口', () => {
       url: ARTICLE_URL,
       contentType: 'html',
       statusCode: 200,
-      enabled: true,
+      overridable: true,
       note: '文章页存档',
       hitCount: 0,
     })
@@ -144,6 +145,77 @@ describe('调试数据管理接口', () => {
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('VALIDATION_ERROR')
   })
+
+  it('编辑可覆盖：单条锁定后捕获浏览器不再更新它', async () => {
+    const created = await create('https://debug.local/locked.html', '<html>v1</html>')
+    expect(created.overridable).toBe(true)
+
+    const locked = await call(
+      app,
+      `/api/debug-data/${created.id}`,
+      json({ overridable: false }, 'PUT'),
+    )
+    expect(locked.status).toBe(200)
+    expect(locked.body.data.overridable).toBe(false)
+  })
+
+  it('批量设置可覆盖：按勾选的 ids 锁定', async () => {
+    const a = await create('https://debug.local/lock-a.html', '<html>a</html>')
+    const b = await create('https://debug.local/lock-b.html', '<html>b</html>')
+    await create('https://debug.local/lock-c.html', '<html>c</html>')
+
+    const response = await call(
+      app,
+      `/api/debug-data/overridable?overridable=false&ids=${a.id},${b.id}`,
+      { method: 'PATCH' },
+    )
+    expect(response.status).toBe(200)
+    expect(response.body.data.updated).toBe(2)
+
+    const rest = await call(app, '/api/debug-data?keyword=lock-')
+    const byUrl = Object.fromEntries(
+      rest.body.data.items.map((item: { url: string; overridable: boolean }) => [item.url, item.overridable]),
+    )
+    expect(byUrl['https://debug.local/lock-a.html']).toBe(false)
+    expect(byUrl['https://debug.local/lock-b.html']).toBe(false)
+    expect(byUrl['https://debug.local/lock-c.html']).toBe(true)
+  })
+
+  it('批量设置可覆盖：按筛选条件（关键词）放开', async () => {
+    await create('https://debug.local/unlock-1.html', '<html>1</html>', { overridable: false })
+    await create('https://debug.local/unlock-2.html', '<html>2</html>', { overridable: false })
+
+    const response = await call(
+      app,
+      '/api/debug-data/overridable?overridable=true&keyword=unlock-',
+      { method: 'PATCH' },
+    )
+    expect(response.status).toBe(200)
+    expect(response.body.data.updated).toBe(2)
+
+    const rest = await call(app, '/api/debug-data?keyword=unlock-&overridable=false')
+    expect(rest.body.data.total).toBe(0)
+  })
+
+  it('批量设置可覆盖：缺少目标值或范围都被拒绝', async () => {
+    // 没有范围
+    const noScope = await call(app, '/api/debug-data/overridable?overridable=false', {
+      method: 'PATCH',
+    })
+    expect(noScope.status).toBe(400)
+
+    // 没有目标值
+    const noValue = await call(app, '/api/debug-data/overridable?keyword=x', {
+      method: 'PATCH',
+    })
+    expect(noValue.status).toBe(400)
+  })
+
+  it('列表可按「可覆盖」筛选', async () => {
+    const response = await call(app, '/api/debug-data?keyword=lock-&overridable=false')
+    expect(response.status).toBe(200)
+    expect(response.body.data.total).toBe(2)
+  })
 })
 
 describe('采集 / 测试命中调试数据', () => {
@@ -214,18 +286,23 @@ describe('采集 / 测试命中调试数据', () => {
     expect(response.body.data.html).toContain('来自调试数据的正文')
   })
 
-  it('停用的调试数据不参与匹配（仍会走真实请求并失败）', async () => {
-    const created = await create('https://debug.local/disabled.html', ARTICLE_HTML)
-    await call(app, `/api/debug-data/${created.id}`, json({ enabled: false }, 'PUT'))
+  it('锁定（不可覆盖）的调试数据仍参与匹配，只是捕获浏览器不更新它', async () => {
+    const created = await create('https://debug.local/locked-hit.html', ARTICLE_HTML, {
+      overridable: false,
+    })
 
     const response = await call(
       app,
       '/api/tester/detail',
-      json({ url: 'https://debug.local/disabled.html', fields: { content: { type: 'html', selector: '.content' } } }),
+      json({
+        url: 'https://debug.local/locked-hit.html',
+        fields: { content: { type: 'html', selector: '.content' } },
+      }),
     )
     expect(response.status).toBe(200)
-    expect(response.body.data.debug).toBe(false)
-    expect(response.body.data.ok).toBe(false)
+    expect(response.body.data.debug).toBe(true)
+    expect(response.body.data.ok).toBe(true)
+    expect(created.overridable).toBe(false)
   })
 })
 

@@ -20,7 +20,7 @@ import { keywordField, likePattern, paginationFields, runRawList, toPage } from 
  * 调试数据服务。
  *
  * 一张表解决两件事：
- * 1. 管理界面（列表 / 新增 / 编辑 / 批量删除）—— 列表不返回 raw，只给字节数；
+ * 1. 管理界面（列表 / 新增 / 编辑 / 批量删除 / 批量设置可覆盖）—— 列表不返回 raw，只给字节数；
  * 2. 采集与测试的「短路」—— 网址完全相等时直接返回存档 raw，不发网络请求。
  *
  * 网址匹配是**严格相等**：不做协议补全、去尾斜杠或参数排序，
@@ -37,7 +37,7 @@ export const debugSampleListQuerySchema = z.object({
   ...paginationFields,
   keyword: keywordField,
   contentType: z.enum(DEBUG_CONTENT_TYPES).optional(),
-  enabled: z.enum(['true', 'false']).optional(),
+  overridable: z.enum(['true', 'false']).optional(),
 })
 
 export type DebugSampleListQuery = z.infer<typeof debugSampleListQuerySchema>
@@ -57,7 +57,7 @@ export const debugSampleCreateSchema = z
     statusCode: z.number().int().min(100).max(599).default(200),
     contentType: z.enum(DEBUG_CONTENT_TYPES).default('html'),
     note: z.string().trim().max(200).nullish(),
-    enabled: z.boolean().default(true),
+    overridable: z.boolean().default(true),
   })
   .strict()
 
@@ -69,7 +69,7 @@ export const debugSampleUpdateSchema = z
     statusCode: z.number().int().min(100).max(599).optional(),
     contentType: z.enum(DEBUG_CONTENT_TYPES).optional(),
     note: z.string().trim().max(200).nullish(),
-    enabled: z.boolean().optional(),
+    overridable: z.boolean().optional(),
   })
   .strict()
   .refine((input) => Object.values(input).some((value) => value !== undefined), {
@@ -86,11 +86,27 @@ export const debugSampleDeleteQuerySchema = z
     ids: z.string().trim().max(4000).optional(),
     keyword: keywordField,
     contentType: z.enum(DEBUG_CONTENT_TYPES).optional(),
-    enabled: z.enum(['true', 'false']).optional(),
+    overridable: z.enum(['true', 'false']).optional(),
   })
   .strict()
 
 export type DebugSampleDeleteQuery = z.infer<typeof debugSampleDeleteQuerySchema>
+
+/**
+ * 批量设置「可覆盖」入参：`overridable` 是要写入的目标值，
+ * ids / 筛选条件圈定范围（至少给一个，语义与批量删除一致）。
+ */
+export const debugSampleOverridableQuerySchema = z
+  .object({
+    ids: z.string().trim().max(4000).optional(),
+    keyword: keywordField,
+    contentType: z.enum(DEBUG_CONTENT_TYPES).optional(),
+    /** 目标值：true = 允许捕获浏览器覆盖，false = 禁止覆盖 */
+    overridable: z.enum(['true', 'false']),
+  })
+  .strict()
+
+export type DebugSampleOverridableQuery = z.infer<typeof debugSampleOverridableQuerySchema>
 
 /* -------------------------------------------------------------------------- */
 /* 行 ↔ DTO                                                                    */
@@ -102,7 +118,7 @@ interface DebugSampleRow {
   statusCode: number | null
   contentType: string | null
   note: string | null
-  enabled: number | null
+  overridable: number | null
   rawSize: number | null
   hitCount: number | null
   lastHitAt: string | null
@@ -116,7 +132,7 @@ interface DebugSampleDetailRow extends DebugSampleRow {
 
 /** 列表列清单：刻意不含 raw，避免把几百 KB 原文拖进列表接口。 */
 const LIST_COLUMNS =
-  'id, url, statusCode, contentType, note, enabled, hitCount, lastHitAt, createdAt, updatedAt, length(CAST(raw AS BLOB)) AS rawSize'
+  'id, url, statusCode, contentType, note, overridable, hitCount, lastHitAt, createdAt, updatedAt, length(CAST(raw AS BLOB)) AS rawSize'
 
 function toContentType(value: string | null): DebugContentType {
   return value === 'json' ? 'json' : 'html'
@@ -129,7 +145,7 @@ function toDto(row: DebugSampleRow): DebugSampleDto {
     statusCode: row.statusCode ?? 200,
     contentType: toContentType(row.contentType),
     note: row.note,
-    enabled: (row.enabled ?? 1) === 1,
+    overridable: (row.overridable ?? 1) === 1,
     rawSize: Number(row.rawSize ?? 0),
     hitCount: Number(row.hitCount ?? 0),
     lastHitAt: row.lastHitAt,
@@ -142,16 +158,17 @@ function toDetailDto(row: DebugSampleDetailRow): DebugSampleDetailDto {
   return { ...toDto(row), raw: row.raw ?? '' }
 }
 
-function enabledParam(value: 'true' | 'false' | undefined): number | undefined {
+/** 把「可覆盖」筛选值翻译成 0/1 参数。 */
+function overridableParam(value: 'true' | 'false' | undefined): number | undefined {
   if (value === undefined) return undefined
   return value === 'true' ? 1 : 0
 }
 
-/** 把筛选条件翻译成 WHERE 片段，list 与 batchDelete 共用，保证语义一致。 */
+/** 把筛选条件翻译成 WHERE 片段，list / batchDelete / batchUpdate 共用，保证语义一致。 */
 function buildConditions(query: {
   keyword?: string
   contentType?: DebugContentType
-  enabled?: 'true' | 'false'
+  overridable?: 'true' | 'false'
   ids?: string
 }): { conditions: string[]; params: Array<string | number> } {
   const conditions: string[] = []
@@ -180,10 +197,10 @@ function buildConditions(query: {
     conditions.push('contentType = ?')
     params.push(query.contentType)
   }
-  const enabled = enabledParam(query.enabled)
-  if (enabled !== undefined) {
-    conditions.push('enabled = ?')
-    params.push(enabled)
+  const overridable = overridableParam(query.overridable)
+  if (overridable !== undefined) {
+    conditions.push('overridable = ?')
+    params.push(overridable)
   }
 
   return { conditions, params }
@@ -263,7 +280,7 @@ export function createDebugSample(input: DebugSampleCreateInput): DebugSampleDet
   const now = new Date().toISOString()
   const result = db()
     .prepare(
-      `INSERT INTO debug_sample (url, raw, statusCode, contentType, note, enabled, hitCount, lastHitAt, createdAt, updatedAt)
+      `INSERT INTO debug_sample (url, raw, statusCode, contentType, note, overridable, hitCount, lastHitAt, createdAt, updatedAt)
        VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
     )
     .run(
@@ -272,7 +289,7 @@ export function createDebugSample(input: DebugSampleCreateInput): DebugSampleDet
       input.statusCode,
       input.contentType,
       input.note ?? null,
-      input.enabled ? 1 : 0,
+      input.overridable ? 1 : 0,
       now,
       now,
     )
@@ -294,11 +311,15 @@ export interface CapturedSampleInput {
  *
  * 与手工新增的区别：网址重复时**覆盖 raw 而不是报 409**。
  * 捕获浏览器本来就是「再访问一次同一个页面」，报冲突会让整个功能不可用；
- * 已有条目的备注、启停状态与命中统计都保留，只更新原文、状态码与类型。
+ * 已有条目的备注、命中统计都保留，只更新原文、状态码与类型。
+ *
+ * 例外：条目被标记为**不可覆盖**（overridable = 0）时跳过更新、返回
+ * `skipped: true` —— 手工整理好的存档不会被一次顺手浏览冲掉。
  */
 export function saveCapturedSample(input: CapturedSampleInput): {
   id: number
   created: boolean
+  skipped: boolean
   rawSize: number
 } {
   const url = input.url.trim()
@@ -306,12 +327,20 @@ export function saveCapturedSample(input: CapturedSampleInput): {
 
   const database = db()
   const existing = database
-    .prepare('SELECT id FROM debug_sample WHERE url = ? ORDER BY id DESC LIMIT 1')
-    .get(url) as unknown as { id: number } | undefined
+    .prepare('SELECT id, overridable, raw FROM debug_sample WHERE url = ? ORDER BY id DESC LIMIT 1')
+    .get(url) as unknown as { id: number; overridable: number | null; raw: string | null } | undefined
   const now = new Date().toISOString()
   const rawSize = Buffer.byteLength(input.raw, 'utf8')
 
   if (existing) {
+    if ((existing.overridable ?? 1) === 0) {
+      return {
+        id: existing.id,
+        created: false,
+        skipped: true,
+        rawSize: Buffer.byteLength(existing.raw ?? '', 'utf8'),
+      }
+    }
     database
       .prepare(
         `UPDATE debug_sample
@@ -326,16 +355,16 @@ export function saveCapturedSample(input: CapturedSampleInput): {
         now,
         existing.id,
       )
-    return { id: existing.id, created: false, rawSize }
+    return { id: existing.id, created: false, skipped: false, rawSize }
   }
 
   const result = database
     .prepare(
-      `INSERT INTO debug_sample (url, raw, statusCode, contentType, note, enabled, hitCount, lastHitAt, createdAt, updatedAt)
+      `INSERT INTO debug_sample (url, raw, statusCode, contentType, note, overridable, hitCount, lastHitAt, createdAt, updatedAt)
        VALUES (?, ?, ?, ?, ?, 1, 0, NULL, ?, ?)`,
     )
     .run(url, input.raw, input.statusCode, input.contentType, input.note ?? null, now, now)
-  return { id: Number(result.lastInsertRowid), created: true, rawSize }
+  return { id: Number(result.lastInsertRowid), created: true, skipped: false, rawSize }
 }
 
 /** 编辑：网址改动时同样要求唯一。 */
@@ -364,7 +393,7 @@ export function updateDebugSample(id: number, input: DebugSampleUpdateInput): De
   if (input.statusCode !== undefined) push('statusCode', input.statusCode)
   if (input.contentType !== undefined) push('contentType', input.contentType)
   if (input.note !== undefined) push('note', input.note ?? null)
-  if (input.enabled !== undefined) push('enabled', input.enabled ? 1 : 0)
+  if (input.overridable !== undefined) push('overridable', input.overridable ? 1 : 0)
   push('updatedAt', new Date().toISOString())
 
   db()
@@ -399,6 +428,32 @@ export function deleteDebugSamples(query: DebugSampleDeleteQuery): { deleted: nu
   return { deleted: Number(result.changes ?? 0) }
 }
 
+/**
+ * 批量设置「可覆盖」（勾选的 ids 或当前筛选条件圈定的范围）。
+ *
+ * 语义与批量删除一致：必须给出范围，不允许无条件的全表更新，
+ * 避免一次误点把所有手工整理的存档一起放开 / 锁死。
+ */
+export function setDebugSamplesOverridable(
+  query: DebugSampleOverridableQuery,
+): { updated: number } {
+  const { overridable, ...scope } = query
+  const { conditions, params } = buildConditions(scope)
+  if (conditions.length === 0) {
+    throw new ValidationError('请至少设置一个修改范围（勾选记录或筛选条件）', [
+      { path: 'query', message: '至少需要一个筛选条件', code: 'too_few' },
+    ])
+  }
+  const result = db()
+    .prepare(
+      `UPDATE debug_sample
+          SET overridable = ?, updatedAt = ?
+        WHERE ${conditions.join(' AND ')}`,
+    )
+    .run(overridable === 'true' ? 1 : 0, new Date().toISOString(), ...params)
+  return { updated: Number(result.changes ?? 0) }
+}
+
 /* -------------------------------------------------------------------------- */
 /* 采集侧命中                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -411,7 +466,7 @@ export interface DebugRawHit {
 }
 
 /**
- * 只判断「这个网址有没有可用的调试数据」，不累加命中次数。
+ * 只判断「这个网址有没有调试数据」，不累加命中次数。
  *
  * 测试器用它提前决定「不需要启动浏览器」，真正的取数仍然走 `lookupDebugRaw`，
  * 这样命中次数的统计口径只有一处，不会被预检放大。
@@ -420,9 +475,7 @@ export function hasDebugRaw(url: string): boolean {
   const key = url.trim()
   if (!key) return false
   try {
-    const row = db()
-      .prepare('SELECT 1 AS hit FROM debug_sample WHERE url = ? AND enabled = 1 LIMIT 1')
-      .get(key)
+    const row = db().prepare('SELECT 1 AS hit FROM debug_sample WHERE url = ? LIMIT 1').get(key)
     return Boolean(row)
   } catch {
     return false
@@ -430,11 +483,10 @@ export function hasDebugRaw(url: string): boolean {
 }
 
 /**
- * 按网址精确查找可用的调试数据。
+ * 按网址精确查找调试数据。
  *
  * 供采集引擎在发请求前调用，约定：
  * - 网址 **完全相等** 才算命中（只去掉首尾空白）；
- * - 只匹配 `enabled = 1` 的条目，停用的数据保留但不参与；
  * - 任何异常都返回 null —— 调试库坏了不能拖垮采集主流程；
  * - 命中后累加命中次数，供界面判断这条数据是否还在被使用。
  */
@@ -446,7 +498,7 @@ export function lookupDebugRaw(url: string): DebugRawHit | null {
     const database = db()
     const row = database
       .prepare(
-        'SELECT id, raw, statusCode, contentType FROM debug_sample WHERE url = ? AND enabled = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT id, raw, statusCode, contentType FROM debug_sample WHERE url = ? ORDER BY id DESC LIMIT 1',
       )
       .get(key) as unknown as
       | { id: number; raw: string | null; statusCode: number | null; contentType: string | null }

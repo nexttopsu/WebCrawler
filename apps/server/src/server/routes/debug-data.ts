@@ -12,11 +12,13 @@ import {
   debugSampleCreateSchema,
   debugSampleDeleteQuerySchema,
   debugSampleListQuerySchema,
+  debugSampleOverridableQuerySchema,
   debugSampleUpdateSchema,
   deleteDebugSample,
   deleteDebugSamples,
   getDebugSample,
   listDebugSamples,
+  setDebugSamplesOverridable,
   updateDebugSample,
 } from '../services/debug-data-service.js'
 import type { ServiceDeps } from './deps.js'
@@ -26,7 +28,8 @@ import type { ApiRoute } from './types.js'
  * 调试数据 API。
  *
  * 列表刻意不返回 raw（原文可能几百 KB），编辑 / 查看单个条目时才取详情；
- * 删除支持「勾选批量」与「按筛选条件批量」两种，语义与日志中心一致。
+ * 删除支持「勾选批量」与「按筛选条件批量」两种，语义与日志中心一致；
+ * 「可覆盖」同样支持单条编辑与批量设置，供捕获浏览器决定要不要覆盖存档。
  *
  * 另有三条 `capture/*` 接口：启动 / 停止一个有头浏览器，
  * 它访问的网页会实时写进同一张表（见 `debug-capture-service`）。
@@ -95,6 +98,17 @@ export function debugDataRoutes(deps: ServiceDeps): ApiRoute[] {
       method: 'DELETE',
       path: '/api/debug-data',
       handler: (event) => jsonOk(event, deleteDebugSamples(parseQuery(event, debugSampleDeleteQuerySchema))),
+    },
+    {
+      // 批量设置「可覆盖」：?overridable=false&ids=1,2,3（或按筛选条件圈定范围）
+      // 必须排在 `/:id` 之前，避免 overridable 被当成 id
+      method: 'PATCH',
+      path: '/api/debug-data/overridable',
+      handler: (event) =>
+        jsonOk(
+          event,
+          setDebugSamplesOverridable(parseQuery(event, debugSampleOverridableQuerySchema)),
+        ),
     },
   ]
 }

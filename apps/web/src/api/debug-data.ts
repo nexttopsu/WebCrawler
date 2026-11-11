@@ -14,7 +14,7 @@ export interface DebugSampleListParams {
   pageSize?: number
   keyword?: string
   contentType?: DebugContentType
-  enabled?: 'true' | 'false'
+  overridable?: 'true' | 'false'
 }
 
 /** 新增 / 编辑调试数据的字段。 */
@@ -24,7 +24,7 @@ export interface DebugSamplePayload {
   statusCode?: number
   contentType?: DebugContentType
   note?: string | null
-  enabled?: boolean
+  overridable?: boolean
 }
 
 /** 批量删除：给 ids（勾选）或筛选条件（至少一个）。 */
@@ -32,7 +32,15 @@ export interface DebugSampleDeleteParams {
   ids?: string
   keyword?: string
   contentType?: DebugContentType
-  enabled?: 'true' | 'false'
+  overridable?: 'true' | 'false'
+}
+
+/** 批量设置「可覆盖」：overridable 是目标值，ids / 筛选条件圈定范围（至少一个）。 */
+export interface DebugSampleOverridableParams {
+  overridable: 'true' | 'false'
+  ids?: string
+  keyword?: string
+  contentType?: DebugContentType
 }
 
 export function listDebugSamples(
@@ -63,6 +71,13 @@ export function deleteDebugSample(id: number): Promise<{ deleted: number }> {
 
 export function deleteDebugSamples(params: DebugSampleDeleteParams): Promise<{ deleted: number }> {
   return api.delete<{ deleted: number }>('/debug-data', params)
+}
+
+/** 批量设置「可覆盖」：不可覆盖的条目不会被捕获浏览器更新。 */
+export function setDebugSamplesOverridable(
+  params: DebugSampleOverridableParams,
+): Promise<{ updated: number }> {
+  return api.patch<{ updated: number }>('/debug-data/overridable', undefined, { params })
 }
 
 /* ------------------------------- 捕获浏览器 ------------------------------- */

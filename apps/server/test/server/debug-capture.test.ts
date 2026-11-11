@@ -5,7 +5,8 @@
  * 能稳定验证的三层：
  * 1. 状态接口在未启动时是 idle，停止幂等；
  * 2. 启动参数校验（非法协议直接 400，不会真的拉起浏览器）；
- * 3. 捕获写入的语义：同一网址覆盖 raw，但保留备注 / 启停 / 命中统计。
+ * 3. 捕获写入的语义：同一网址覆盖 raw，但保留备注 / 命中统计；
+ *    标记为不可覆盖的条目跳过更新。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { H3 } from 'h3'
@@ -87,7 +88,7 @@ describe('只记录 200 / 304', () => {
 describe('捕获写入调试库', () => {
   const url = 'https://capture.local/article/1.html'
 
-  it('新建后同一网址再捕获：覆盖 raw，保留备注 / 启停 / 命中', () => {
+  it('新建后同一网址再捕获：覆盖 raw，保留备注 / 命中', () => {
     const first = saveCapturedSample({
       url,
       raw: '<html><body>第一版</body></html>',
@@ -96,6 +97,7 @@ describe('捕获写入调试库', () => {
       note: '浏览器捕获',
     })
     expect(first.created).toBe(true)
+    expect(first.skipped).toBe(false)
     expect(first.rawSize).toBe(Buffer.byteLength('<html><body>第一版</body></html>', 'utf8'))
 
     // 用户改了备注，并命中过一次
@@ -110,6 +112,7 @@ describe('捕获写入调试库', () => {
       note: '浏览器捕获',
     })
     expect(second.created).toBe(false)
+    expect(second.skipped).toBe(false)
     expect(second.id).toBe(first.id)
 
     const detail = getDebugSample(first.id)
@@ -118,6 +121,33 @@ describe('捕获写入调试库', () => {
     // 备注不被自动捕获覆盖，命中次数继续累加
     expect(detail.note).toBe('我的备注')
     expect(detail.hitCount).toBe(1)
+  })
+
+  it('不可覆盖的条目：捕获时跳过，保留手工整理的原文', () => {
+    const lockedUrl = 'https://capture.local/locked/1.html'
+    const first = saveCapturedSample({
+      url: lockedUrl,
+      raw: '<html><body>手工整理版</body></html>',
+      statusCode: 200,
+      contentType: 'html',
+      note: '浏览器捕获',
+    })
+    updateDebugSample(first.id, { overridable: false })
+
+    const second = saveCapturedSample({
+      url: lockedUrl,
+      raw: '<html><body>顺手浏览版</body></html>',
+      statusCode: 200,
+      contentType: 'html',
+      note: '浏览器捕获',
+    })
+    expect(second.skipped).toBe(true)
+    expect(second.created).toBe(false)
+    expect(second.id).toBe(first.id)
+
+    const detail = getDebugSample(first.id)
+    expect(detail.raw).toContain('手工整理版')
+    expect(detail.overridable).toBe(false)
   })
 
   it('JSON 类型按 json 存档，编辑器可见', () => {
