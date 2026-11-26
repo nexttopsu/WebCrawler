@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { Copy, FolderPlus, Pencil, Play, Plus, RefreshCw, Trash2, Zap } from '@lucide/vue'
+import { ChevronRight, Copy, FolderPlus, Pencil, Play, Plus, RefreshCw, Trash2, Zap } from '@lucide/vue'
 import type {
   CategoryDto,
   CategoryTestDto,
@@ -43,9 +43,16 @@ const LIST_URL_HINT = 'https://example.com/news'
 const initialSiteId = Number(route.query.siteId ?? 0) || undefined
 
 /**
+ * 表格行：刻意不带 `children` 字段。
+ * el-table 的 treeProps 默认就会识别 `children`，只要行上有这个字段
+ * 就会画出展开箭头并嵌套子行；子栏目数量改用 childCount 单独传递。
+ */
+type CategoryRow = Omit<CategoryTreeNodeDto, 'children'> & { childCount: number }
+
+/**
  * 全量栏目树（模块级共享，见 useCategoryTree）。
  *
- * 上级选择器、层级缩进、归属路径、搜索都基于同一份数据，
+ * 上级选择器、归属路径、层级导航都基于同一份数据，
  * 不会出现「列表里看不到父栏目」的情况。
  */
 const { tree: allRows, loading, error, load: reloadTree, ancestorPathMap } = useCategoryTree()
@@ -55,9 +62,91 @@ const filters = reactive<{ keyword: string; siteId?: number; enabled: string }>(
   enabled: '',
 })
 
+/** URL 里的 parentId 表示当前打开的上级栏目；没有则是根层级。 */
+function parentIdFromQuery(): number | null {
+  const id = Number(route.query.parentId ?? 0)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+const currentParentId = ref<number | null>(parentIdFromQuery())
+const page = ref(1)
+const pageSize = ref(20)
+
+/** 层级写回 URL：刷新、复制链接、地址栏直接改参数都能停在同一个层级。 */
+function syncParentQuery(): void {
+  const query = { ...route.query }
+  if (currentParentId.value === null) delete query.parentId
+  else query.parentId = String(currentParentId.value)
+  const unchanged =
+    Object.keys(query).length === Object.keys(route.query).length &&
+    Object.keys(query).every((key) => query[key] === route.query[key])
+  if (!unchanged) void router.replace({ query })
+}
+
+function setLevel(id: number | null): void {
+  currentParentId.value = id
+  page.value = 1
+  selected.value = []
+  syncParentQuery()
+}
+
+// 地址栏里的 parentId 变化时同步层级（前进/后退或直接改地址）
+watch(
+  () => route.query.parentId,
+  (raw) => {
+    const id = Number(raw ?? 0)
+    const next = Number.isInteger(id) && id > 0 ? id : null
+    if (next !== currentParentId.value) {
+      currentParentId.value = next
+      page.value = 1
+      selected.value = []
+    }
+  },
+)
+
 async function load(): Promise<void> {
   await reloadTree()
+  // URL 指向的层级已不存在（栏目被删或链接失效）时退回根层级并清理 URL
+  if (currentParentId.value !== null && !findNode(allRows.value, currentParentId.value)) {
+    setLevel(null)
+  }
 }
+
+/** 从根到当前层级的节点链（含当前节点），供面包屑与取子级列表使用。 */
+const levelAncestors = computed<CategoryTreeNodeDto[]>(() => {
+  if (currentParentId.value === null) return []
+  const walk = (nodes: CategoryTreeNodeDto[], chain: CategoryTreeNodeDto[]): CategoryTreeNodeDto[] | null => {
+    for (const node of nodes) {
+      const next = [...chain, node]
+      if (node.id === currentParentId.value) return next
+      const found = walk(node.children, next)
+      if (found) return found
+    }
+    return null
+  }
+  return walk(allRows.value, []) ?? []
+})
+
+/** 表格只渲染当前层级（同级栏目），子层级要靠点击栏目名进入。 */
+const levelRows = computed<CategoryTreeNodeDto[]>(() => {
+  if (currentParentId.value === null) return allRows.value
+  return levelAncestors.value.at(-1)?.children ?? []
+})
+
+function enterLevel(row: CategoryRow): void {
+  if (!row.childCount) return
+  setLevel(row.id)
+}
+
+// 切换站点筛选时，若当前层级属于别的站点则退回根层级
+watch(
+  () => filters.siteId,
+  (siteId) => {
+    if (!siteId || currentParentId.value === null) return
+    const current = levelAncestors.value.at(-1)
+    if (current && current.siteId !== siteId) setLevel(null)
+  },
+)
 
 /** 名称下方的归属说明：「站点 · 上级路径」，顶级栏目只显示站点。 */
 function categorySubLabel(row: CategoryDto): string {
@@ -66,34 +155,41 @@ function categorySubLabel(row: CategoryDto): string {
   return path ? `${site} · ${path}` : site
 }
 
-/**
- * 树上就地过滤：命中节点连同其祖先一起保留，层级不会被筛选打断
- * （搜「国内」时仍能看到它挂在「要闻」下）。祖先即使不命中也会显示。
- */
+/** 筛选只作用于当前层级，不再跨层级搜索。 */
 const visibleRows = computed<CategoryTreeNodeDto[]>(() => {
   const keyword = filters.keyword.trim().toLowerCase()
   const enabledOnly = filters.enabled === 'true'
   const disabledOnly = filters.enabled === 'false'
   const siteId = filters.siteId
-  if (!keyword && !enabledOnly && !disabledOnly && !siteId) return allRows.value
+  const nodes = levelRows.value
+  if (!keyword && !enabledOnly && !disabledOnly && !siteId) return nodes
 
-  const walk = (nodes: CategoryTreeNodeDto[]): CategoryTreeNodeDto[] => {
-    const result: CategoryTreeNodeDto[] = []
-    for (const node of nodes) {
-      if (siteId && node.siteId !== siteId) continue
-      const children = walk(node.children)
-      const hit =
-        (!keyword ||
-          node.name.toLowerCase().includes(keyword) ||
-          (node.code ?? '').toLowerCase().includes(keyword) ||
-          node.listUrl.toLowerCase().includes(keyword)) &&
-        (!enabledOnly || node.enabled) &&
-        (!disabledOnly || !node.enabled)
-      if (hit || children.length > 0) result.push({ ...node, children })
-    }
-    return result
-  }
-  return walk(allRows.value)
+  return nodes.filter((node) => {
+    if (siteId && node.siteId !== siteId) return false
+    if (enabledOnly && !node.enabled) return false
+    if (disabledOnly && node.enabled) return false
+    return (
+      !keyword ||
+      node.name.toLowerCase().includes(keyword) ||
+      (node.code ?? '').toLowerCase().includes(keyword) ||
+      node.listUrl.toLowerCase().includes(keyword)
+    )
+  })
+})
+
+/** 分页只切当前层级的数据，避免栏目多时一次渲染整张表。 */
+const totalRows = computed(() => visibleRows.value.length)
+const maxPage = computed(() => Math.max(1, Math.ceil(totalRows.value / pageSize.value)))
+const pagedRows = computed<CategoryRow[]>(() => {
+  const start = (page.value - 1) * pageSize.value
+  return visibleRows.value.slice(start, start + pageSize.value).map(({ children, ...row }) => ({
+    ...row,
+    childCount: children?.length ?? 0,
+  }))
+})
+
+watch(maxPage, (value) => {
+  if (page.value > value) page.value = value
 })
 
 const isFiltered = computed(
@@ -176,9 +272,11 @@ function onSiteChange(siteId: number | null): void {
 function openCreate(parent?: CategoryDto): void {
   editingId.value = null
   copyFromId.value = null
+  // 顶部「新建栏目」默认建在当前浏览的层级里；行内「子栏目」仍以该行为上级
+  const defaultParent = parent ?? (currentParentId.value === null ? undefined : levelAncestors.value.at(-1))
   Object.assign(form, {
-    siteId: parent?.siteId ?? filters.siteId ?? initialSiteId ?? null,
-    parentId: parent?.id ?? null,
+    siteId: defaultParent?.siteId ?? filters.siteId ?? initialSiteId ?? null,
+    parentId: defaultParent?.id ?? null,
     name: '',
     code: '',
     listUrl: '',
@@ -397,9 +495,9 @@ const deleteBlocked = ref<string | null>(null)
 /** 有子栏目时删除一定失败，直接置灰确认按钮，不发起请求 */
 const deleteHasChildren = ref(false)
 
-function askDelete(row: CategoryDto): void {
+function askDelete(row: CategoryRow): void {
   deleteTarget.value = row
-  const children = (row as CategoryTreeNodeDto).children?.length ?? 0
+  const children = row.childCount
   deleteHasChildren.value = children > 0
   deleteBlocked.value = children > 0 ? `该栏目下还有 ${children} 个子栏目，需先把子栏目删除或移走` : null
   deleteVisible.value = true
@@ -446,6 +544,34 @@ void load()
       </template>
     </PageHeader>
 
+    <div class="level-bar wb-card">
+      <el-breadcrumb separator="/">
+        <el-breadcrumb-item>
+          <button
+            v-if="currentParentId !== null"
+            type="button"
+            class="crumb-link"
+            @click="setLevel(null)"
+          >
+            全部栏目
+          </button>
+          <span v-else class="crumb-current">全部栏目</span>
+        </el-breadcrumb-item>
+        <el-breadcrumb-item v-for="(node, index) in levelAncestors" :key="node.id">
+          <button
+            v-if="index < levelAncestors.length - 1"
+            type="button"
+            class="crumb-link"
+            @click="setLevel(node.id)"
+          >
+            {{ node.name }}
+          </button>
+          <span v-else class="crumb-current">{{ node.name }}</span>
+        </el-breadcrumb-item>
+      </el-breadcrumb>
+      <span class="level-count">当前层级 {{ totalRows }} 个栏目</span>
+    </div>
+
     <FilterBar :active="isFiltered" @reset="resetFilters">
       <SearchBar v-model="filters.keyword" placeholder="搜索栏目名称或地址" />
       <el-select v-model="filters.siteId" placeholder="全部网站" clearable filterable style="width: 190px">
@@ -458,25 +584,38 @@ void load()
     </FilterBar>
 
     <DataTable
-      :rows="visibleRows"
+      :key="currentParentId ?? 'root'"
+      :rows="pagedRows"
       :loading="loading"
       :error="error"
-      :show-pagination="false"
-      :tree-props="{ children: 'children' }"
-      :tree-indent="28"
-      default-expand-all
+      :page="page"
+      :page-size="pageSize"
+      :total="totalRows"
       row-key="id"
       selectable
       empty-title="还没有栏目"
       empty-description="栏目需要归属到一个网站，并绑定采集规则"
+      @update:page="page = $event"
+      @update:page-size="pageSize = $event"
       @selection-change="onSelectionChange"
       @retry="load()"
       @refresh="load()"
     >
-      <el-table-column prop="name" label="栏目" min-width="170" class-name="col-category">
+      <el-table-column prop="name" label="栏目" min-width="170">
         <template #default="{ row }">
           <div class="cell-main">
-            <span class="cell-title">{{ row.name }}</span>
+            <button
+              v-if="row.childCount"
+              type="button"
+              class="cell-title drill-link"
+              :title="`查看 ${row.childCount} 个子栏目`"
+              @click="enterLevel(row)"
+            >
+              {{ row.name }}
+              <ChevronRight :size="14" />
+              <span class="child-count">{{ row.childCount }}</span>
+            </button>
+            <span v-else class="cell-title">{{ row.name }}</span>
             <span class="wb-muted cell-sub">{{ categorySubLabel(row) }}</span>
           </div>
         </template>
@@ -675,11 +814,45 @@ void load()
   gap: 14px;
 }
 
-/* 名称列的树缩进（el-table__indent）是行内元素：若 cell 用默认块布局，内容过宽
-   时会换行顶到单元格最左、缩进失效。改为 flex 行内排布，标题与路径超宽时省略。 */
-:deep(.col-category .cell) {
+.level-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+}
+
+.level-bar :deep(.el-breadcrumb) {
   display: flex;
   align-items: center;
+  font-size: 13px;
+}
+
+.crumb-link,
+.drill-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--wb-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.crumb-link:hover,
+.drill-link:hover {
+  color: var(--wb-primary-hover);
+  text-decoration: underline;
+}
+
+.crumb-current {
+  color: var(--wb-text);
+  font-weight: 600;
+}
+
+.level-count {
+  font-size: 12px;
+  color: var(--wb-text-muted);
 }
 
 .cell-main {
@@ -698,6 +871,22 @@ void load()
 }
 
 .cell-title {
+  font-weight: 500;
+}
+
+.drill-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.child-count {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--wb-primary-soft);
+  color: var(--wb-primary);
+  font-size: 11px;
   font-weight: 500;
 }
 
