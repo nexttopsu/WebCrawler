@@ -1,0 +1,108 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.11.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 每次 push master 只验证前后端能构建，不产出可下载的包。
+      - name: Build server and web
+        run: pnpm build
+
+      # 只有打 tag 或手动触发时才打包桌面版；版本号取自 tag（v0.7.1 -> 0.7.1）。
+      - name: Build Electron desktop zip
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        run: |
+          $refName = $env:GITHUB_REF_NAME
+          if ($refName -match '^v') {
+            $version = $refName -replace '^v', ''
+          } else {
+            $version = (Get-Content package.json -Raw -Encoding UTF8 | ConvertFrom-Json).version
+          }
+          Write-Host "Building desktop package version: $version"
+          pwsh ./packaging/electron/build.ps1 -Version $version
+
+      - name: Smoke test desktop app
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem artifacts/electron/*.zip | Select-Object -First 1
+          if (-not $zip) { throw 'No Electron zip found' }
+          $target = Join-Path $env:RUNNER_TEMP 'webcrawler-electron-smoke'
+          Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $target -Force
+          $env:WEBCRAWLER_API_PORT = '3210'
+          $env:WEBCRAWLER_UI_PORT = '3211'
+          $exe = Get-ChildItem -LiteralPath $target -Filter 'WebCrawler.exe' -Recurse | Select-Object -First 1
+          if (-not $exe) { throw 'WebCrawler.exe not found in zip' }
+          $proc = Start-Process -FilePath $exe.FullName -PassThru
+          try {
+            $response = $null
+            for ($i = 0; $i -lt 60; $i += 1) {
+              try {
+                $response = Invoke-WebRequest 'http://127.0.0.1:3211/api/health' -UseBasicParsing -TimeoutSec 2
+                if ($response.StatusCode -eq 200) { break }
+              } catch {
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (-not $response -or $response.StatusCode -ne 200) { throw 'Desktop API smoke test failed' }
+            $ui = Invoke-WebRequest 'http://127.0.0.1:3211/' -UseBasicParsing -TimeoutSec 5
+            if ($ui.StatusCode -ne 200) { throw 'Desktop UI smoke test failed' }
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Prepare web/API artifact
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/web | Out-Null
+          Copy-Item -Recurse apps/server/dist artifacts/web/server-dist
+          Copy-Item -Recurse apps/web/dist artifacts/web/web-dist
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        with:
+          name: webcrawler-web-api
+          path: artifacts/web
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
+        with:
+          name: webcrawler-electron-desktop
+          path: artifacts/electron/*.zip
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: WebCrawler ${{ github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/electron/*.zip

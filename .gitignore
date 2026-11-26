@@ -20,6 +20,10 @@ coverage/
 tmp/
 .workbuddy
 
+# Electron 打包产物与本地构建依赖
+artifacts/
+packaging/electron/node_modules/
+
 # 静态资源目录：内容不入库（采集下载的缩略图等），仅保留 .gitkeep 占位符
 resources/*
 !resources/.gitkeep

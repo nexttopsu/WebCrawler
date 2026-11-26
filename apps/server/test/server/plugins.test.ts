@@ -26,13 +26,14 @@ describe('插件管理', () => {
     const { status, body } = await call(app, '/api/plugins')
 
     expect(status).toBe(200)
-    expect(body.data.total).toBe(5)
+    expect(body.data.total).toBe(6)
     expect(body.data.items.map((item: { pluginId: string }) => item.pluginId)).toEqual([
       'cntc-eyxw-news',
       'demo-fixture',
       'example-flow-news',
       'example-parser-clean',
       'generic-cover-download',
+      'parser-content-plaintext',
     ])
 
     const demo = body.data.items.find((item: { pluginId: string }) => item.pluginId === 'demo-fixture')
@@ -53,6 +54,7 @@ describe('插件管理', () => {
     expect(parser.body.data.items.map((item: { pluginId: string }) => item.pluginId)).toEqual([
       'example-parser-clean',
       'generic-cover-download',
+      'parser-content-plaintext',
     ])
 
     const keyword = await call(app, '/api/plugins?keyword=fixture')

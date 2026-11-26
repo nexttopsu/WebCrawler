@@ -629,13 +629,25 @@ ORMlet 只接受 `TEXT` / `INTEGER` / `REAL` / `BLOB`，不支持 `NOT NULL`、`
 
 ```bash
 pnpm build                      # shared → database/request/core/plugin-system → server(dist) + web(dist)
-pnpm --filter @webcrawler/server start        # 或 node apps/server/dist/index.js
+pnpm --filter @webcrawler/server start        # 或 node apps/server/dist/server/index.js
 ```
 
 - 前端产物在 `apps/web/dist`，是纯静态文件，交给 Nginx / Caddy 托管即可；后端只需暴露 `/api`。
 - 前后端同域部署时把 `dist` 的 404 回退到 `index.html`（history 路由），并把 `/api` 反代到后端；跨域部署时构建前设置 `VITE_API_BASE_URL`。
 - 后端需要的环境变量见上一节；`DATABASE_FILE` 指向的目录必须可写，SQLite 单文件部署，备份即复制该文件。
 - 生产必须保持 `ALLOW_PRIVATE_NETWORK=false`，并配置 `PROXY_SECRET_KEY`（否则带密码的代理写入会被拒绝）。
+
+### Windows 桌面版（Electron）
+
+```bash
+pnpm build
+pwsh ./packaging/electron/build.ps1   # 输出 artifacts/electron/WebCrawler-<version>-win-x64.zip（约 155 MB）
+```
+
+- 解压后运行 `WebCrawler.exe`：Electron 窗口加载本地界面，`/api` 与 `/resources` 由主进程反代给后端，服务端源码无需改动。
+- 后端以 `ELECTRON_RUN_AS_NODE=1` 由 Electron 可执行文件直接启动（内置 Node 24），数据库建在 exe 同级的 `data/`；端口可用 `WEBCRAWLER_API_PORT` / `WEBCRAWLER_UI_PORT` 调整。
+- 源码仍只有一条主干：桌面版配方集中在 `packaging/electron/`，不用维护 exe 分支。`.github/workflows/build.yml` 对 `master` 的 push 只做构建验证；只有 push `v*` tag（如 `v0.7.1`）或手动触发时才打包桌面 zip、上传 artifact，tag 还会自动发布 Release，版本号取自 tag 名。
+- 桌面包不携带 Playwright Chromium：浏览器采集与调试捕获不可用，HTTP 采集不受影响。
 
 ## 阶段边界
 

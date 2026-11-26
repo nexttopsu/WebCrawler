@@ -1,0 +1,15 @@
+appId: com.webcrawler.desktop
+productName: WebCrawler
+copyright: Copyright © 2026 WebCrawler
+
+directories:
+  app: ../../artifacts/_electron/app
+  output: ../../artifacts/electron
+
+# 后端子进程需要读取插件目录和 node_modules；禁用 asar，保证它们是真实文件
+asar: false
+
+win:
+  target:
+    - zip
+  artifactName: WebCrawler-${version}-win-x64.${ext}
