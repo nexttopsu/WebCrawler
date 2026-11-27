@@ -6,7 +6,7 @@
  * 前端只负责触发下载，不在浏览器里拼大数组。
  */
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { CloudDownload, Download, Eye, FileJson, FileSpreadsheet, RefreshCw, Trash2 } from '@lucide/vue'
 import type { ArticleSummaryDto, SiteDto } from '@webcrawler/shared'
@@ -29,7 +29,19 @@ import DataTable from '@/components/common/DataTable.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import CategorySelect from '@/components/common/CategorySelect.vue'
 
+const route = useRoute()
 const router = useRouter()
+
+/* ------------------------------ 分页与 URL 同步 ------------------------------ */
+
+/** 只允许正整数；非法或缺省时回退默认值。 */
+function positiveIntQuery(raw: string | null | (string | null)[] | undefined, fallback: number): number {
+  const value = Number(Array.isArray(raw) ? raw[0] : (raw ?? fallback))
+  return Number.isInteger(value) && value > 0 ? value : fallback
+}
+
+const initialPage = positiveIntQuery(route.query.page, 1)
+const initialPageSize = positiveIntQuery(route.query.pageSize, 20)
 
 const list = useListQuery<
   ArticleSummaryDto,
@@ -55,6 +67,35 @@ const list = useListQuery<
       order: 'desc',
     }),
   { keyword: '', siteId: undefined, categoryId: undefined, detailStatus: '', range: null },
+  { page: initialPage, pageSize: initialPageSize },
+)
+
+/** 分页状态 → URL：默认值从地址栏移除，无变化时 write 不触发路由导航。 */
+function syncPaginationQuery(): void {
+  const query = { ...route.query }
+  if (list.page.value === 1) delete query.page
+  else query.page = String(list.page.value)
+  if (list.pageSize.value === 20) delete query.pageSize
+  else query.pageSize = String(list.pageSize.value)
+  const unchanged =
+    Object.keys(query).length === Object.keys(route.query).length &&
+    Object.keys(query).every((key) => query[key] === route.query[key])
+  if (!unchanged) void router.replace({ query })
+}
+
+watch([list.page, list.pageSize], syncPaginationQuery)
+
+// URL → 分页状态：地址栏手改 / 浏览器前进后退 / 跨页带参跳转时重查
+watch(
+  () => [route.query.page, route.query.pageSize] as const,
+  ([rawPage, rawSize]) => {
+    const nextPage = positiveIntQuery(rawPage, 1)
+    const nextPageSize = positiveIntQuery(rawSize, 20)
+    if (nextPage === list.page.value && nextPageSize === list.pageSize.value) return
+    list.page.value = nextPage
+    list.pageSize.value = nextPageSize
+    void list.load()
+  },
 )
 
 const siteOptions = ref<SiteDto[]>([])

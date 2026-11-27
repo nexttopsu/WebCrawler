@@ -42,6 +42,12 @@ const headerDescription = computed(() => {
 
 const tab = ref<'content' | 'raw' | 'json'>('content')
 
+/** 返回上一步；直接打开详情页（无历史记录）时退回列表，避免跳出站点。 */
+function goBack(): void {
+  if (window.history.state?.back) router.back()
+  else void router.push('/articles')
+}
+
 /** 正文是否含 HTML 标签：含则安全渲染，否则按纯文本展示（保留换行）。 */
 const HTML_TAG_PATTERN = /<[a-z][\s\S]*>/i
 function isHtmlContent(content: string): boolean {
@@ -194,7 +200,7 @@ const jsonValue = computed(() => {
       :description="headerDescription"
     >
       <template #actions>
-        <el-button @click="router.push('/articles')">
+        <el-button @click="goBack">
           <ArrowLeft :size="14" />
           <span>返回列表</span>
         </el-button>

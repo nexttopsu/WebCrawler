@@ -3,6 +3,8 @@ import type { PaginatedData } from '@webcrawler/shared'
 import { errorMessage } from '@/api/client'
 
 export interface ListQueryOptions {
+  /** 初始页码（从 URL 等外部状态恢复时使用） */
+  page?: number
   pageSize?: number
   /** 是否在创建后立即加载 */
   immediate?: boolean
@@ -20,7 +22,7 @@ export function useListQuery<T, F extends Record<string, unknown>>(
   initialFilters: F,
   options: ListQueryOptions = {},
 ) {
-  const page = ref(1)
+  const page = ref(options.page ?? 1)
   const pageSize = ref(options.pageSize ?? 20)
   const rows = ref<T[]>([]) as { value: T[] }
   const total = ref(0)
