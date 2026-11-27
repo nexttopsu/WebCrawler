@@ -44,7 +44,7 @@ export interface ArticleData {
   articleTime?: string
   /** 摘要；未提取时由入库层按正文自动生成 */
   summary?: string
-  /** 纯文本正文 */
+  /** 正文；content 配成 html 类型时保留清洗后的 HTML，否则为纯文本 */
   content?: string
   /**
    * 封面图绝对地址，预留给下游展示使用，**允许为空**。

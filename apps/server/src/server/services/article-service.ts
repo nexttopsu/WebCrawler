@@ -3,6 +3,7 @@ import {
   getModels,
   type ArticleRow,
 } from '../../database/index.js'
+import { htmlToText } from '../../core/clean.js'
 import {
   ArticleDetailStatus,
   normalizeArticleUrl,
@@ -61,7 +62,8 @@ export function toIsoTime(raw: string | null | undefined): string | null {
 }
 
 function buildSummary(content: string): string | null {
-  const flat = content.replace(/\s+/g, ' ').trim()
+  // 正文可能保留 HTML 标签，摘要只取纯文本
+  const flat = htmlToText(content).replace(/\s+/g, ' ').trim()
   if (!flat) return null
   return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat
 }
@@ -655,7 +657,7 @@ export const articleUpdateSchema = z
     title: z.string().trim().min(1, '标题不能为空').max(300, '标题最长 300 字').optional(),
     author: z.string().trim().max(100, '作者最长 100 字').nullable().optional(),
     summary: z.string().trim().max(5000, '摘要最长 5000 字').nullable().optional(),
-    /** 纯文本正文 */
+    /** 正文，可含清洗后的 HTML 标签 */
     content: z.string().max(2_000_000, '正文过长').nullable().optional(),
     /** 空串 / null 表示清除封面 */
     coverUrl: z.string().trim().max(2048, '封面地址过长').nullable().optional(),

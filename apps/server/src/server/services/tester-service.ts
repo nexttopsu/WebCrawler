@@ -487,6 +487,9 @@ export async function testAdhocDetail(
     ...(input.parserPlugins && input.parserPlugins.length > 0
       ? { parserPlugins: input.parserPlugins }
       : {}),
+    ...(input.excludeSelectors && input.excludeSelectors.length > 0
+      ? { excludeSelectors: input.excludeSelectors }
+      : {}),
   }
 
   const proxy = resolveProxySetting(input.proxyId)
@@ -510,9 +513,16 @@ export async function testAdhocDetail(
           if (!extraction) {
             return { key, value: null, matched: 0, required: false, ok: false, error: '字段未被管道处理' }
           }
+          // 展示管道输出的入库值（content 保留清洗后的 HTML、图片已绝对地址化），
+          // 与真实保存保持一致；自定义字段不在 article 顶层，仍用提取值（入库时原样进 metadata）。
+          const articleRecord = result.article as unknown as Record<string, unknown> | null
+          const savedValue =
+            articleRecord && Object.prototype.hasOwnProperty.call(articleRecord, key)
+              ? articleRecord[key]
+              : undefined
           return {
             key: extraction.key,
-            value: extraction.value,
+            value: savedValue ?? extraction.value,
             matched: extraction.matched,
             required: extraction.required,
             ok: extraction.ok,

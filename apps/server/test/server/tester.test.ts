@@ -260,23 +260,63 @@ describe('POST /api/tester/detail', () => {
     expect(data.ok).toBe(true)
     expect(data.missing).toEqual([])
 
+    const article = data.article
     const byKey = Object.fromEntries(data.fields.map((field: any) => [field.key, field]))
     expect(byKey.title.value).toBe('第二篇报道：轨道交通')
     expect(byKey.title.matched).toBe(1)
     expect(byKey.author.value).toBe('记者乙')
     expect(byKey.publishTime.value).toBe('2026-01-02 10:30')
 
-    // 字段诊断里的 value 是原始提取值；清洗后的正文在 article 上
+    // 字段展示值与入库 article 一致：content 保留清洗后的 HTML 标签、去掉广告
     expect(byKey.content.value).toContain('新线路进入试运行阶段')
+    expect(byKey.content.value).toBe(article.content)
 
     // 管道产出的完整文章数据可用于正式采集落库
-    const article = data.article
     expect(article.title).toBe('第二篇报道：轨道交通')
     expect(article.content).toContain('新线路进入试运行阶段')
     expect(article.content).not.toContain('广告位')
     expect(article.content).not.toContain('<script')
     // 正文图片不再单独输出，映射的 images 字段作为自定义字段进 metadata
     expect(article.metadata.images).toContain('/images/2.png')
+  })
+
+  it('详情排除选择器：提取前删除命中节点（不依赖 clean.removeSelectors）', async () => {
+    const response = await call(app, '/api/tester/detail', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: `${fixture.origin}/article/2`,
+        fields: {
+          title: { type: 'text', selector: '.article-title', required: true },
+          content: { type: 'html', selector: '.article-content' },
+        },
+        // 只传 excludeSelectors，不传 clean：验证详情测试器把该字段带进采集配置
+        excludeSelectors: ['.ad'],
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    const data = response.body.data
+    expect(data.ok).toBe(true)
+    expect(data.article.content).not.toContain('广告位')
+    expect(data.fields.find((field: any) => field.key === 'content').value).not.toContain('广告位')
+  })
+
+  it('字段展示值与入库 article 完全一致', async () => {
+    const response = await call(app, '/api/tester/detail', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: `${fixture.origin}/article/2`,
+        fields: {
+          title: { type: 'text', selector: '.article-title', required: true },
+          content: { type: 'html', selector: '.article-content' },
+        },
+      }),
+    })
+
+    const data = response.body.data
+    const byKey = Object.fromEntries(data.fields.map((field: any) => [field.key, field]))
+    expect(byKey.content.value).toBe(data.article.content)
+    expect(data.article.content).toMatch(/<p[\s>]/)
   })
 
   it('必填字段缺失时 ok:false，并列出缺失字段', async () => {
@@ -469,9 +509,9 @@ describe('测试器：全流程插件', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.data.ok).toBe(true)
-    // 字段诊断是原始提取值；解析器插件的处理结果体现在最终 article 上
+    // 字段展示的是入库值，解析器插件的处理结果也体现在字段诊断上
     expect(response.body.data.fields.find((field: { key: string }) => field.key === 'title').value).toBe(
-      '第二篇报道：轨道交通',
+      '第二篇报道：轨道交通!',
     )
     expect(response.body.data.article.title).toBe('第二篇报道：轨道交通!')
   })

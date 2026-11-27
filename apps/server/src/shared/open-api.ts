@@ -411,7 +411,7 @@ export const OPEN_API_DOC: OpenApiDoc = {
         meta: { requestId: '0f9c1f4e2b7a4d8e', timestamp: '2026-11-09T07:00:00.000Z' },
       },
       notes: [
-        '正文是采集清洗后的纯文本（保留换行），不含 HTML 标签；需要原始 HTML 请用管理端接口。',
+        '正文按规则中 content 字段的类型输出：配成 html 时保留清洗后的 HTML 标签（已去脚本与事件属性、图片转绝对地址），配成 text 时为纯文本；需要整页原始 HTML 请用管理端接口。',
         'extra 是采集规则提取的自定义字段，键名由规则决定，不同文章的键可能不同；列表接口不返回该字段。',
         'id 不是正整数时返回 400；文章不存在时返回 404，error.code 为 NOT_FOUND。',
       ],

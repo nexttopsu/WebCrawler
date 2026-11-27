@@ -163,14 +163,13 @@ export async function runPipeline(input: PipelineInput, parser: Parser = sharedP
   const contentIsHtml = contentRule?.type === 'html'
   const cleanOptions = { removeSelectors: input.clean?.removeSelectors }
 
-  // html 仅作为正文提取的中间产物：content 配成 html 类型或正文缺失时从 HTML 转纯文本，
-  // 不再作为文章字段输出。
+  // 正文 HTML 清洗后直接作为 content 落库（规则里 content 配成 html 类型时）；
+  // 规则里单独映射的 html 字段（整页）只用于兜底，不覆盖正文。
   let html = ''
-  if (rawHtml) {
-    html = cleanHtml(rawHtml, cleanOptions)
-  } else if (contentIsHtml && rawContent) {
-    // content 配成 html 类型时，HTML 正文同时作为文章 html
+  if (contentIsHtml && rawContent) {
     html = cleanHtml(rawContent, cleanOptions)
+  } else if (rawHtml) {
+    html = cleanHtml(rawHtml, cleanOptions)
   }
   if (input.clean?.keepImages === false && html) {
     html = cleanHtml(html, { removeSelectors: [...(input.clean.removeSelectors ?? []), 'img'] })
@@ -179,10 +178,12 @@ export async function runPipeline(input: PipelineInput, parser: Parser = sharedP
 
   let content = ''
   if (contentIsHtml) {
-    content = htmlToText(html || rawContent)
+    // 保留清洗后的 HTML 标签，规则测试器展示的就是这份内容
+    content = html || htmlToText(rawContent)
   } else {
     content = stringValue(rawContent)
   }
+  // 正文没抽到时从整页 HTML 兜底；整页内容只取纯文本，避免把导航页脚当正文
   if (!content && html) content = htmlToText(html)
 
   // 封面图优先级：详情页显式映射（cover / coverUrl）> 列表阶段提取的封面；
@@ -211,7 +212,8 @@ export async function runPipeline(input: PipelineInput, parser: Parser = sharedP
   } else if (input.validate?.minTitleLength && title.length < input.validate.minTitleLength) {
     validationErrors.add(`标题长度不足 ${input.validate.minTitleLength} 字`)
   }
-  if (input.validate?.minContentLength && content.length < input.validate.minContentLength) {
+  // 正文可能保留 HTML 标签，按纯文本长度校验，避免标签虚高影响最小长度判断
+  if (input.validate?.minContentLength && htmlToText(content).length < input.validate.minContentLength) {
     validationErrors.add(`正文长度不足 ${input.validate.minContentLength} 字`)
   }
 

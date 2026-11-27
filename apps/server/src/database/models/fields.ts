@@ -144,7 +144,7 @@ export const articleFields = {
   url: 'TEXT',
   author: 'TEXT',
   summary: 'TEXT',
-  /** 纯文本正文 */
+  /** 正文；规则 content 配成 html 类型时含清洗后的 HTML 标签 */
   content: 'TEXT',
   /** 抓取到的原始 HTML，供「原始数据」查看 */
   rawHtml: 'TEXT',

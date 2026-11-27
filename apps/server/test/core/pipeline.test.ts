@@ -38,18 +38,33 @@ describe('数据管道：完整流程', () => {
     expect(article.metadata).toMatchObject({ source: '本站' })
   })
 
-  it('纯文本正文：清洗掉脚本与广告内容', async () => {
+  it('HTML 正文：保留标签并清洗掉脚本与广告内容', async () => {
     const article = (await runPipeline(baseInput)).article!
 
+    expect(article.content).toMatch(/<p[\s>]/)
     expect(article.content).toContain('第一段正文')
     expect(article.content).not.toContain('document.write')
+    expect(article.content).not.toContain('<script')
     expect(article.content).not.toContain('这里是广告')
+    expect(article.content).not.toContain('onclick')
+    expect(article.content).not.toContain('javascript:')
   })
 
-  it('纯文本正文保留段落换行且不夹带多余空格', async () => {
+  it('HTML 正文的图片地址转为绝对地址', async () => {
     const article = (await runPipeline(baseInput)).article!
+    expect(article.content).toContain('https://example.com/images/a.png')
+  })
+
+  it('content 配成 text 时仍输出纯文本', async () => {
+    const article = (
+      await runPipeline({
+        ...baseInput,
+        fields: { ...detailFields, content: { type: 'text', selector: '.article-content' } },
+      })
+    ).article!
+
     expect(article.content).toContain('第一段正文')
-    expect(article.content).not.toMatch(/\n\s+/)
+    expect(article.content).not.toContain('<p')
   })
 
   it('记录每个管道的执行阶段', async () => {

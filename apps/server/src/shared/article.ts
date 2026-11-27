@@ -31,7 +31,7 @@ export interface ArticleSummaryDto {
 
 /** 详情：包含正文与扩展字段。 */
 export interface ArticleDto extends ArticleSummaryDto {
-  /** 纯文本正文 */
+  /** 正文；规则 content 配成 html 类型时含清洗后的 HTML 标签 */
   content: string | null
   /** 规则未映射到标准字段的其余字段 */
   extra: Record<string, unknown>

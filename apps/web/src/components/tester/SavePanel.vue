@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import type { CrawlRuleConfig, RuleDto, RuleSummaryDto, SiteDto } from '@webcrawler/shared'
 import { ElMessage } from 'element-plus'
-import { Download, Save, Upload } from '@lucide/vue'
+import { Save } from '@lucide/vue'
 import { createRule, listProxies, listRules, listSites, updateRule, validateRuleConfig, type ProxyItem } from '@/api/tester'
 import CategorySelect from '@/components/common/CategorySelect.vue'
 
@@ -152,23 +152,7 @@ async function validate(): Promise<void> {
   }
 }
 
-/* ------------------------------ 导入 / 导出 ------------------------------ */
-
-const fileInputRef = ref<HTMLInputElement | null>(null)
-
-function exportJson(): void {
-  if (!props.config) {
-    ElMessage.warning('当前没有可导出的配置')
-    return
-  }
-  const blob = new Blob([JSON.stringify(props.config, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = `webcrawler-rule-${new Date().toISOString().slice(0, 10)}.json`
-  anchor.click()
-  URL.revokeObjectURL(url)
-}
+/* ------------------------------ 导入 ------------------------------ */
 
 function importJson(event: Event): void {
   const input = event.target as HTMLInputElement
@@ -248,7 +232,7 @@ function importJson(event: Event): void {
         <el-button type="primary" :icon="Save" :loading="saving" :disabled="!canSave" @click="save">
         {{ rule ? '保存修改' : '保存规则' }}
       </el-button>
-      <input ref="fileInputRef" type="file" accept=".json,application/json" hidden @change="importJson" />
+      <input type="file" accept=".json,application/json" hidden @change="importJson" />
     </div>
 
     <p class="hint">草稿会自动保存到本地（不含代理凭据），刷新页面后自动恢复。</p>

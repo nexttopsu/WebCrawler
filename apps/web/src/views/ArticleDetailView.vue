@@ -2,7 +2,7 @@
 /**
  * 文章详情。
  *
- * 正文为采集到的纯文本；原始 HTML 来自 rawHtml（服务端原样返回，查看时只读）。
+ * 正文按采集规则输出（content 配成 html 时含清洗后的 HTML 标签）；原始 HTML 来自 rawHtml（服务端原样返回，查看时只读）。
  */
 import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -12,6 +12,7 @@ import type { ArticleDto, ArticleRawDto } from '@webcrawler/shared'
 import { deleteArticle, getArticle, getArticleRaw, updateArticle } from '@/api/articles'
 import { errorMessage } from '@/api/client'
 import { useAsyncState } from '@/composables/useAsyncState'
+import { sanitizeHtml } from '@/lib/sanitize'
 import PageHeader from '@/components/common/PageHeader.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -40,6 +41,12 @@ const headerDescription = computed(() => {
 })
 
 const tab = ref<'content' | 'raw' | 'json'>('content')
+
+/** 正文是否含 HTML 标签：含则安全渲染，否则按纯文本展示（保留换行）。 */
+const HTML_TAG_PATTERN = /<[a-z][\s\S]*>/i
+function isHtmlContent(content: string): boolean {
+  return HTML_TAG_PATTERN.test(content)
+}
 
 /* --------------------------------- 原始 HTML -------------------------------- */
 
@@ -250,7 +257,14 @@ const jsonValue = computed(() => {
         </div>
 
         <div v-show="tab === 'content'" class="tab-panel">
-          <pre v-if="article.data.value.content" class="wb-code article-text">{{ article.data.value.content }}</pre>
+          <template v-if="article.data.value.content">
+            <div
+              v-if="isHtmlContent(article.data.value.content)"
+              class="article-html"
+              v-html="sanitizeHtml(article.data.value.content)"
+            />
+            <pre v-else class="wb-code article-text">{{ article.data.value.content }}</pre>
+          </template>
           <EmptyState v-else compact title="没有正文内容" />
         </div>
 
@@ -322,7 +336,7 @@ const jsonValue = computed(() => {
           <el-input v-model="editForm.summary" type="textarea" :rows="3" maxlength="5000" show-word-limit />
         </el-form-item>
         <el-form-item label="正文">
-          <el-input v-model="editForm.content" type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" placeholder="纯文本正文" />
+          <el-input v-model="editForm.content" type="textarea" :autosize="{ minRows: 10, maxRows: 26 }" placeholder="正文，可含 HTML 标签" />
         </el-form-item>
       </el-form>
     </FormDialog>
@@ -423,5 +437,30 @@ const jsonValue = computed(() => {
   max-height: 620px;
   overflow: auto;
   padding: 14px 16px;
+}
+
+.article-html {
+  line-height: 1.85;
+  font-family: var(--wb-font);
+  font-size: 13.5px;
+  max-height: 620px;
+  overflow: auto;
+  padding: 14px 16px;
+  word-break: break-word;
+}
+
+.article-html :deep(p),
+.article-html :deep(ul),
+.article-html :deep(ol) {
+  margin: 0 0 12px;
+}
+
+.article-html :deep(img) {
+  max-width: 100%;
+  height: auto;
+}
+
+.article-html :deep(a) {
+  color: var(--wb-primary);
 }
 </style>
